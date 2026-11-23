@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fasorial-capacitores"
+version = "1.0.0"
+description = "Análisis fasorial, optimización técnico-económica de bancos de capacitores y laboratorio educativo para una red de distribución de 24 h."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "plotly>=5.18",
+    "matplotlib>=3.8",
+    "streamlit>=1.32",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv", "outputs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+ignore = [
+    "N803",   # argumentos con notación física (R_gen, Q_C, X_line)
+    "N806",   # variables con notación física (V_gen, I_line, ...)
+    "N802",   # nombres de función con símbolos físicos
+    "N815",
+    "N812",   # alias cortos de módulos de tema/gráficas (T, CH)
+    "N816",
+    "RUF001", # caracteres unicode (Ω, ∠, θ) intencionales en textos
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Plantillas Markdown/LaTeX: las líneas largas son texto literal del reporte y del dashboard.
+"src/reporting/presentation_export.py" = ["E501"]
+"app/dashboard.py" = ["E501"]
