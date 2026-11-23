@@ -688,7 +688,7 @@ Pares en conflicto: {", ".join(map(str, B.feasibility.conflicting_pairs))}.
     st.markdown("#### :material/balance: Requisito de fp en atraso vs. regulación estricta [950, 1100] V")
     st.markdown(
         rf"""
-**Teorema (verificado en código).** $|V_{{gen}}(t,Q_C)|^2 = a\,Q_C^2 + b(t)\,Q_C + c(t)$ es convexa; su mínimo en el
+**Teorema.** $|V_{{gen}}(t,Q_C)|^2 = a\,Q_C^2 + b(t)\,Q_C + c(t)$ es convexa; su mínimo en el
 intervalo de atraso $0 \le Q_C \le Q(t)$ está en $Q_C = Q(t)$ para las 24 h ($Q_{{neto}} = 0$, fp = 1.0). En la hora
 {LAG.worst_hour}: $\min |V_{{gen}}| = {LAG.max_floor_v:.2f}\ \text{{V}} > 1100\ \text{{V}}$. Por tanto, con
 $X_{{line}} = 900\ \Omega$ **ningún** banco (fijo o automático, continuo o discreto) puede cumplir la banda en
@@ -852,7 +852,7 @@ with tabs[3]:
             (
                 r"11. Pérdidas en la línea y en el generador",
                 rf"P_{{loss,line}} = \frac{{|I_{{line}}|^2\cdot 80}}{{1000}} = {c.p_loss_line_kw[t]:.6f}\ \text{{kW}},\quad"
-                rf"P_{{loss,gen}} = \frac{{|I_{{gen}}|^2\cdot 0.5}}{{1000}} = {c.p_loss_gen_kw[t]:.6f}\ \text{{kW}}",
+                rf" P_{{loss,gen}} = \frac{{|I_{{gen}}|^2\cdot 0.5}}{{1000}} = {c.p_loss_gen_kw[t]:.6f}\ \text{{kW}}",
             ),
             (
                 r"12. Pérdidas totales (R_eq = 80 + 0.5·13.2² = 167.12 Ω)",
@@ -871,7 +871,7 @@ with tabs[3]:
             (
                 r"9. Pérdidas en la línea y en el generador",
                 rf"P_{{loss,line}} = \frac{{|I|^2\cdot 80}}{{1000}} = {c.p_loss_line_kw[t]:.4f}\ \text{{kW}},\quad"
-                rf"P_{{loss,gen}} = \frac{{|I|^2\cdot 0.5}}{{1000}} = {c.p_loss_gen_kw[t]:.4f}\ \text{{kW}}",
+                rf" P_{{loss,gen}} = \frac{{|I|^2\cdot 0.5}}{{1000}} = {c.p_loss_gen_kw[t]:.4f}\ \text{{kW}}",
             ),
             (
                 r"10. Pérdidas totales",

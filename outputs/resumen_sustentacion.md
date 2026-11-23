@@ -217,7 +217,7 @@ hora es el mayor múltiplo del paso que no excede Q(t) (pérdidas κ·(Q − Q_C
 | 23 | 94.6287 | 3 | 75 | 19.6287 | 0.9886 | 1385.70 | 16.3305 |
 | 24 | 93.3892 | 3 | 75 | 18.3892 | 0.9897 | 1374.08 | 15.7943 |
 
-**Teorema (verificado en `lagging_voltage_limit` y en `pytest`).** \|V_gen(t, Q_C)\|² = a·Q_C² + b(t)·Q_C + c(t) es
+**Teorema.** \|V_gen(t, Q_C)\|² = a·Q_C² + b(t)·Q_C + c(t) es
 convexa; su mínimo en el intervalo de atraso [0, Q(t)] se alcanza en Q_C = Q(t) en las 24 h (Q_net = 0, fp_neto = 1.0).
 El peor caso es la **hora 12: \|V_gen\| = 1,438.03 V > 1 100 V**. Con X_line = 900 Ω la
 corriente en fase (o en atraso) produce una caída jI·X/n₁ que suma en cuadratura con V₀·a₂/n₁ = 1 000 V y, con la

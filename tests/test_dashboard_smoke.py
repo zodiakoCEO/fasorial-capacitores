@@ -65,6 +65,27 @@ def test_teaching_phase_toggle(app) -> None:
         assert len(app.latex) >= 10
 
 
+LATEX_COMMANDS = {
+    "Omega", "angle", "begin", "cdot", "circ", "cos", "end", "frac", "le", "ge", "left", "right",
+    "min", "max", "quad", "qquad", "tan", "text", "varepsilon", "mathrm", "approx", "times",
+}  # fmt: skip
+LATEX_CMD = re.compile(r"\\([A-Za-z]+)")
+INLINE_MATH = re.compile(r"\$([^$]+)\$")
+
+
+def test_latex_commands_are_well_formed(app) -> None:
+    """Detecta comandos pegados a texto (p. ej. ``\\quadP``) en todo el LaTeX renderizado, ambas fases."""
+    phase = next(r for r in app.radio if r.key == "teach_phase")
+    bad: set[str] = set()
+    for option in phase.options:
+        phase.set_value(option).run()
+        sources = [e.value for e in app.latex]
+        sources += [m for md in app.markdown for m in INLINE_MATH.findall(md.value)]
+        for src in sources:
+            bad |= {f"\\{cmd}" for cmd in LATEX_CMD.findall(src) if cmd not in LATEX_COMMANDS}
+    assert not bad, f"Comandos LaTeX desconocidos o sin espacio: {sorted(bad)}"
+
+
 @pytest.mark.parametrize("strategy", [s.value for s in Strategy if s is not Strategy.MANUAL])
 def test_circuit_strategy_selector(app, strategy: str) -> None:
     box = next(s for s in app.selectbox if s.key == "diag_strategy")
