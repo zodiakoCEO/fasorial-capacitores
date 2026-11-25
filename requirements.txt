@@ -1,3 +1,4 @@
+# Dependencias del dashboard (Streamlit Community Cloud instala este archivo al desplegar)
 numpy
 scipy
 pandas
