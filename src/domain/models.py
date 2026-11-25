@@ -93,6 +93,40 @@ class NetworkParameters:
         """Tensión en el primario de T2 = V_0 · a2 (13 200∠0° V)."""
         return self.v_load * self.a2
 
+    @property
+    def line_kv(self) -> float:
+        """Tensión nominal de la línea en kV (secundario de T1 = primario de T2)."""
+        return self.t1_secondary_v / 1000.0
+
+    @property
+    def t1_label(self) -> str:
+        """Relación de T1 como en la Figura 2: '1kV:13.2kV'."""
+        return f"{self.t1_primary_v / 1000:g}kV:{self.t1_secondary_v / 1000:g}kV"
+
+    @property
+    def t2_label(self) -> str:
+        """Relación de T2 como en la Figura 2: '13.2kV:120V'."""
+        return f"{self.t2_primary_v / 1000:g}kV:{self.t2_secondary_v:g}V"
+
+    @property
+    def r_gen_line_side(self) -> float:
+        """R_gen referida al lado de línea: R_gen·n1² (87.12 Ω a 13.2 kV; 2178 Ω a 66 kV)."""
+        return self.r_gen * self.n1**2
+
+    @property
+    def z_gen_side(self) -> complex:
+        """Impedancia serie total vista desde el generador: R_gen + Z_line / n1²."""
+        return self.r_gen + self.z_line / self.n1**2
+
+    @property
+    def v_load_gen_side(self) -> complex:
+        """Tensión de la carga referida al generador: V_0·a2 / n1 (1000∠0° V en ambos casos)."""
+        return self.v_load * self.a2 / self.n1
+
+    def with_line_voltage(self, v_line: float) -> NetworkParameters:
+        """Misma red con otra tensión de línea: T1 = primario : v_line y T2 = v_line : secundario."""
+        return replace(self, t1_secondary_v=v_line, t2_primary_v=v_line)
+
     def with_line_reactance(self, x_line: float) -> NetworkParameters:
         return replace(self, z_line=complex(self.r_line, x_line))
 

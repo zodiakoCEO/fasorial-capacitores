@@ -33,6 +33,26 @@ CAPACITOR_COST_COP_PER_KVAR: Final[float] = 100_000.0
 V_GEN_MIN_V: Final[float] = 950.0
 V_GEN_MAX_V: Final[float] = 1_100.0
 
+# --- Diseño adoptado: banco fijo del Problema 2 -----------------------------------
+QC_FIXED_ECONOMIC_KVAR: Final[float] = 378.35
+"""Q_C instalado del «Banco fijo — óptimo económico» (kvar).
+
+Es el banco fijo de menor costo anual J entre los que mantienen |V_gen| dentro de [950, 1100] V
+el mayor número posible de horas (23 de 24); ``fixed_economic_optimum`` lo deduce de los datos y
+``tests/test_optimization.py`` comprueba que coincide con este valor.
+"""
+
+# --- Problema 2.1: misma red con la línea a 66 kV ---------------------------------
+LINE_VOLTAGE_2_1_V: Final[float] = 66_000.0
+"""Tensión de línea del Problema 2.1: T1 = 1 kV : 66 kV y T2 = 66 kV : 120 V."""
+
+QC_FIXED_ECONOMIC_2_1_KVAR: Final[float] = 87.25
+"""Q_C del «Banco fijo — óptimo económico» en el Problema 2.1 (kvar).
+
+A 66 kV sí existe un banco fijo que cumple la banda las 24 h (Q_C ∈ [87.248, 1530.469] kvar). El mínimo
+libre de J (85.76 kvar) queda justo fuera, así que el de menor costo es el extremo inferior de la ventana.
+"""
+
 # --- Horizonte ---------------------------------------------------------------------
 HOURS_PER_DAY: Final[int] = 24
 HOUR_DURATION_H: Final[float] = 1.0

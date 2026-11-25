@@ -61,5 +61,12 @@ STRATEGY_DASH: Final[dict[Strategy, str]] = {
 LOAD_COLOR: Final[dict[str, str]] = {"L1 Residencial": SERIES[0], "L2 Industrial": SERIES[1]}
 LOSS_COLOR: Final[dict[str, str]] = {"Línea (80 Ω)": SERIES[0], "Generador (0.5 Ω)": SERIES[1]}
 
+# Controles dibujados por Plotly (Reproducir / Pausa): botón claro con texto oscuro (contraste 14:1).
+# Plotly colorea el botón activo y el :hover con un fondo claro fijo, de modo que esta combinación
+# se mantiene legible en todos los estados y en ambos temas.
+BUTTON_BG: Final[str] = "#E2E8F0"
+BUTTON_INK: Final[str] = "#0F172A"
+BUTTON_BORDER: Final[str] = "#94A3B8"
+
 FONT_FAMILY: Final[str] = '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif'
 FONT_MONO: Final[str] = '"IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace'

@@ -7,20 +7,25 @@ import math
 import numpy as np
 import pytest
 
+from src.domain.constants import QC_FIXED_ECONOMIC_KVAR
 from src.domain.models import DemandProfile, NetworkParameters, Strategy
 from src.optimization.capacitor_optimizer import (
+    FeasibilityReport,
     Interval,
     analytic_hour_feasible_set,
     closed_form_fixed_optimum,
     cost_derivative,
     feasibility_analysis,
+    fixed_bank_scan,
     fixed_economic_optimum,
     fixed_lagging_optimum,
     fixed_voltage_pareto,
+    hours_in_band,
     intersect_many,
     lagging_dispatch,
     lagging_voltage_limit,
     line_reactance_sensitivity,
+    max_band_window,
     pareto_front_mask,
     project_onto_set,
     switched_capacitor_bank,
@@ -110,39 +115,123 @@ def test_no_fixed_qc_satisfies_band_dense_grid(demand, params) -> None:
 
 
 # ----------------------------------------------------------------------------------
-# 2. Óptimo económico fijo
+# 2. Banco fijo — óptimo económico (Q_C = 378.35 kvar)
 # ----------------------------------------------------------------------------------
-def test_economic_optimum_closed_form_vs_numeric(demand, params) -> None:
+def test_free_minimum_closed_form_vs_numeric(demand, params) -> None:
     res = fixed_economic_optimum(demand, params)
-    assert res.q_c_closed_form_kvar == pytest.approx(res.q_c_numeric_kvar, abs=1e-5)
-    assert abs(res.derivative_at_optimum) < 1e-4
-    q = res.q_c_closed_form_kvar
+    assert res.q_c_free_kvar == pytest.approx(91.02971, abs=1e-5)
+    assert res.q_c_free_kvar == pytest.approx(res.q_c_free_numeric_kvar, abs=1e-5)
+    assert abs(res.derivative_at_free) < 1e-4
+    q = res.q_c_free_kvar
     j0 = float(total_annual_cost_fixed(q, demand, params))
     for dq in (-1.0, -0.01, 0.01, 1.0):
         assert float(total_annual_cost_fixed(q + dq, demand, params)) > j0
 
 
 def test_economic_cost_function_matches_circuit(demand, params) -> None:
-    q = 91.0
-    r = solve_problem2(demand, q, params)
-    expected = r.daily_energy_loss_kwh * 960 * 365 + 100_000 * q
-    assert float(total_annual_cost_fixed(q, demand, params)) == pytest.approx(expected, rel=1e-12)
+    for q in (91.0, QC_FIXED_ECONOMIC_KVAR):
+        r = solve_problem2(demand, q, params)
+        expected = r.daily_energy_loss_kwh * 960 * 365 + 100_000 * q
+        assert float(total_annual_cost_fixed(q, demand, params)) == pytest.approx(expected, rel=1e-12)
 
 
-def test_economic_summary_kpis(demand, params) -> None:
-    res = fixed_economic_optimum(demand, params).result
-    e = res.economics
-    assert e.capex_cop == pytest.approx(100_000 * res.q_c_installed_kvar)
+def test_free_minimum_kpis(demand, params) -> None:
+    free = fixed_economic_optimum(demand, params).free
+    e = free.economics
+    assert e.capex_cop == pytest.approx(100_000 * free.q_c_installed_kvar)
     assert e.annual_savings_cop > 0
     assert e.payback_days == pytest.approx(e.capex_cop / e.annual_savings_cop * 365)
     assert e.roi_pct(1) == pytest.approx(100 * (e.annual_savings_cop - e.capex_cop) / e.capex_cop)
     assert e.total_annual_cost_cop < e.baseline_annual_loss_cost_cop
-    assert res.hours_out_of_band > 0  # el óptimo económico viola la banda de tensión
+    assert free.hours_out_of_band == 23  # el mínimo libre de J no regula la tensión
 
 
 def test_closed_form_derivative_sign(demand, params) -> None:
     q = closed_form_fixed_optimum(demand, params)
     assert cost_derivative(q - 5, demand, params) < 0 < cost_derivative(q + 5, demand, params)
+
+
+def test_max_band_window_synthetic() -> None:
+    sets = ((Interval(0, 10),), (Interval(5, 20),), (Interval(30, 40), Interval(50, 60)), (Interval(8, 8),))
+    feas = FeasibilityReport(np.arange(1, 5), sets, (), (), (), 0.0, 100.0)
+    band = max_band_window(feas)
+    assert band.hours_in_band == 3 and not band.is_fully_feasible
+    assert band.window == (Interval(8, 8),)
+    band2 = max_band_window(FeasibilityReport(np.arange(1, 4), sets[:3], (), (), (), 0.0, 100.0))
+    assert band2.hours_in_band == 2 and band2.window == (Interval(5, 10),)
+
+
+def test_fixed_economic_design_is_378_35(demand, params, feas) -> None:
+    res = fixed_economic_optimum(demand, params, feasibility=feas)
+    assert QC_FIXED_ECONOMIC_KVAR == 378.35
+    assert res.q_c_design_kvar == QC_FIXED_ECONOMIC_KVAR  # el código deduce exactamente el valor adoptado
+    assert res.result.q_c_installed_kvar == QC_FIXED_ECONOMIC_KVAR
+    assert np.all(res.result.q_c_profile_kvar == QC_FIXED_ECONOMIC_KVAR)
+    # Ventana de máximo cumplimiento: 23/24 h para Q_C ∈ [378.349, 384.847] kvar
+    assert res.band.hours_in_band == 23
+    assert len(res.band.window) == 1
+    assert res.band.window[0].lo == pytest.approx(378.349059, abs=1e-5)
+    assert res.band.window[0].hi == pytest.approx(384.847381, abs=1e-5)
+    assert res.q_c_band_optimum_kvar == pytest.approx(res.band.window[0].lo, abs=1e-12)
+    assert 0 <= res.q_c_design_kvar - res.q_c_band_optimum_kvar < 0.01
+    assert res.band.window[0].contains(res.q_c_design_kvar, tol=0.0)
+    assert res.derivative_at_design > 0  # J crece en la ventana ⇒ el mínimo es su extremo inferior
+    assert res.hours_out == (8,)
+
+
+def test_no_fixed_bank_beats_23_hours_dense_grid(demand, params, feas) -> None:
+    q = np.linspace(0.0, 2000.0, 400_001)
+    model = affine_voltage_model(demand, params)
+    v = np.abs(model.A[:, None] + model.B * q[None, :])
+    count = ((v >= params.v_gen_min) & (v <= params.v_gen_max)).sum(axis=0)
+    assert count.max() == 23
+    assert q[count == 23].min() >= 378.349 - 0.005
+    assert hours_in_band(feas.hourly_sets, QC_FIXED_ECONOMIC_KVAR) == 23
+    assert hours_in_band(feas.hourly_sets, 378.34) == 21  # un paso por debajo salen dos horas valle
+
+
+def test_fixed_economic_design_values(demand, params) -> None:
+    """Valores de referencia con Q_C = 378.35 kvar (contrastados con la auditoría independiente)."""
+    r = fixed_economic_optimum(demand, params).result
+    e = r.economics
+    assert e.daily_loss_kwh == pytest.approx(2233.7263575, abs=1e-6)
+    assert r.circuit.p_loss_line_kw.sum() == pytest.approx(1069.2802, abs=1e-3)
+    assert r.circuit.p_loss_gen_kw.sum() == pytest.approx(1164.4461, abs=1e-3)
+    assert e.capex_cop == pytest.approx(37_835_000.0)
+    assert e.annual_loss_cost_cop == pytest.approx(782_697_715.66, abs=0.01)
+    assert e.total_annual_cost_cop == pytest.approx(820_532_715.66, abs=0.01)
+    assert e.annual_savings_cop == pytest.approx(-561_195_727.27, abs=0.01)
+    assert math.isinf(e.payback_days)  # con ahorro negativo la inversión no se recupera
+    assert e.roi_pct(1) == pytest.approx(-1583.27, abs=0.01)
+    assert r.v_gen_mag.min() == pytest.approx(838.8386, abs=1e-3) and int(np.argmin(r.v_gen_mag)) + 1 == 8
+    assert r.v_gen_mag.max() == pytest.approx(1086.3697, abs=1e-3) and int(np.argmax(r.v_gen_mag)) + 1 == 19
+    assert r.max_violation_v == pytest.approx(111.1614, abs=1e-3)
+    assert r.hours_out_of_band == 1
+    i_line = np.abs(r.circuit.i_line)
+    assert i_line.max() == pytest.approx(26.58658, abs=1e-4) and int(np.argmax(i_line)) + 1 == 4
+    assert i_line.min() == pytest.approx(20.89880, abs=1e-4) and int(np.argmin(i_line)) + 1 == 12
+    assert r.hours_leading == 24 and not r.is_always_lagging
+    assert r.pf_net.min() == pytest.approx(0.14247, abs=1e-4)
+    assert r.pf_net.max() == pytest.approx(0.59812, abs=1e-4)
+    assert np.all(r.q_net_kvar < 0)
+
+
+def test_fixed_economic_is_feasible_when_region_exists(demand) -> None:
+    p = NetworkParameters().with_line_reactance(500.0)
+    res = fixed_economic_optimum(demand, p)
+    assert res.band.is_fully_feasible
+    assert res.result.is_voltage_feasible
+    assert res.hours_out == ()
+
+
+def test_fixed_bank_scan(demand, params, feas) -> None:
+    scan = fixed_bank_scan(demand, params, feas)
+    assert scan["Horas_en_banda"].max() == 23
+    row = scan.loc[scan["Costo_total_anual_COP"].idxmin()]
+    assert row["Q_C_kvar"] == pytest.approx(91.0, abs=0.25)
+    np.testing.assert_allclose(
+        scan["Costo_total_anual_COP"], total_annual_cost_fixed(scan["Q_C_kvar"].to_numpy(), demand, params)
+    )
 
 
 # ----------------------------------------------------------------------------------
@@ -228,22 +317,16 @@ def test_cash_flow_and_format(params) -> None:
 
 def test_full_pipeline(demand) -> None:
     bundle = run_full_analysis(demand, include_sensitivity=False)
-    assert set(bundle.strategies) == {
-        Strategy.NO_CAPACITOR,
-        Strategy.FIXED_ECONOMIC,
-        Strategy.FIXED_MIN_VIOLATION,
-        Strategy.SWITCHED,
-        Strategy.FIXED_LAGGING,
-        Strategy.SWITCHED_LAGGING,
-    }
+    assert list(bundle.strategies) == [Strategy.NO_CAPACITOR, Strategy.FIXED_ECONOMIC]
+    assert bundle.economic.q_c_design_kvar == QC_FIXED_ECONOMIC_KVAR
     table = bundle.comparison_table()
-    assert len(table) == 7
+    assert len(table) == 2
     assert {"fp_neto_min", "fp_neto_max", "Estado_fp_24h", "Horas_adelanto"} <= set(table.columns)
-    assert bundle.switched.result.hours_out_of_band == 0
+    assert table["Q_C_instalado_kvar"].tolist() == [0.0, QC_FIXED_ECONOMIC_KVAR]
+    assert table["Horas_fuera_banda"].tolist() == [24, 1]
     status = dict(zip(table["Estrategia"], table["Estado_fp_24h"], strict=True))
-    assert status[bundle.fixed_lagging.result.label] == "24/24 h en atraso"
-    assert status[bundle.switched_lagging.result.label] == "24/24 h en atraso"
-    assert status[bundle.switched.result.label].endswith("h en adelanto")
+    assert status[bundle.no_capacitor.label] == "24/24 h en atraso"
+    assert status[bundle.economic.result.label] == "24 h en adelanto"
 
 
 # ----------------------------------------------------------------------------------
@@ -262,7 +345,7 @@ def test_fixed_lagging_respects_qnet_nonnegative(demand, params) -> None:
     assert res.result.is_always_lagging and res.result.hours_leading == 0
     assert np.all(res.result.pf_net <= 1.0 + 1e-12)
     # El costo restringido no puede ser menor que el óptimo libre
-    free = fixed_economic_optimum(demand, params).result.economics.total_annual_cost_cop
+    free = fixed_economic_optimum(demand, params).free.economics.total_annual_cost_cop
     assert res.result.economics.total_annual_cost_cop >= free
 
 

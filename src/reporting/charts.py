@@ -6,6 +6,7 @@ Usados por el dashboard Streamlit. Sin dependencias de UI.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -276,6 +277,118 @@ def fig_feasibility_map(
     return fig
 
 
+def fig_band_hours(scan: pd.DataFrame, q_design: float, hours_at_design: int) -> go.Figure:
+    """Horas del día con |V_gen| dentro de la banda en función del Q_C fijo instalado."""
+    fig = go.Figure(
+        go.Scatter(
+            x=scan["Q_C_kvar"],
+            y=scan["Horas_en_banda"],
+            mode="lines",
+            name="Horas en banda",
+            line={"color": T.SERIES[0], "width": 2, "shape": "hv"},
+            fill="tozeroy",
+            fillcolor="rgba(42,120,214,0.12)",
+            hovertemplate="Q_C=%{x:.2f} kvar<br>%{y} h en banda<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[q_design],
+            y=[hours_at_design],
+            mode="markers+text",
+            name="Banco fijo adoptado",
+            text=[f"{q_design:g} kvar → {hours_at_design}/24 h"],
+            textposition="top left",
+            textfont={"size": 11},
+            marker={"size": 11, "color": T.SERIES[1], "line": {"width": 2, "color": T.SURFACE}},
+            hovertemplate=f"Q_C={q_design:g} kvar<br>{hours_at_design} h en banda<extra></extra>",
+        )
+    )
+    _base(
+        fig,
+        "Horas dentro de [950, 1100] V según el Q_C fijo instalado",
+        "Horas en banda (de 24)",
+        hovermode="closest",
+        showlegend=False,
+    )
+    fig.update_xaxes(title="Q_C [kvar]")
+    fig.update_yaxes(range=[0, 25.5], dtick=4)
+    return fig
+
+
+def fig_compare_vgen(cases: Mapping[str, tuple[StrategyResult, str, str]], params: NetworkParameters) -> go.Figure:
+    """|V_gen(t)| de varios casos sobre la banda admisible. cases: nombre → (resultado, color, trazo)."""
+    fig = go.Figure()
+    fig.add_hrect(
+        y0=params.v_gen_min,
+        y1=params.v_gen_max,
+        fillcolor=T.BAND_FILL,
+        line_width=0,
+        annotation_text=f"Banda admisible [{params.v_gen_min:g}, {params.v_gen_max:g}] V",
+        annotation_position="bottom right",
+        annotation_font={"color": T.GOOD, "size": 11},
+    )
+    for lim in (params.v_gen_min, params.v_gen_max):
+        fig.add_hline(y=lim, line={"color": T.GOOD, "width": 1, "dash": "dot"})
+    for name, (r, color, dash) in cases.items():
+        hours = r.circuit.hours
+        fig.add_trace(_line(hours, r.v_gen_mag, name, color, dash, "V", ",.1f"))
+        out = r.violation_v > 1e-6
+        if out.any():
+            fig.add_trace(
+                go.Scatter(
+                    x=hours[out],
+                    y=r.v_gen_mag[out],
+                    mode="markers",
+                    name=f"Fuera de banda — {name}",
+                    marker={"symbol": "x-thin-open", "size": 11, "color": T.CRITICAL, "line": {"width": 2.5}},
+                    customdata=r.violation_v[out],
+                    showlegend=False,
+                    hovertemplate="fuera de banda por %{customdata:.1f} V<extra></extra>",
+                )
+            )
+    _base(fig, "Tensión del generador |V_gen(t)| con banco fijo", "|V_gen| [V]", height=400, xaxis=HOURS_AXIS)
+    return fig
+
+
+def fig_compare_daily_losses(cases: Mapping[str, CircuitResult]) -> go.Figure:
+    """Energía perdida al día por caso, apilada en línea y generador. cases: nombre → circuito."""
+    names = list(cases)
+    fig = go.Figure()
+    parts = (
+        ("Línea (80 Ω)", [float(c.p_loss_line_kw.sum()) for c in cases.values()]),
+        ("Generador (0.5 Ω)", [float(c.p_loss_gen_kw.sum()) for c in cases.values()]),
+    )
+    for label, vals in parts:
+        fig.add_trace(
+            go.Bar(
+                x=names,
+                y=vals,
+                name=label,
+                marker={"color": T.LOSS_COLOR[label], "line": {"width": 1, "color": T.SURFACE}},
+                hovertemplate="%{y:,.2f} kWh/día<extra>" + label + "</extra>",
+            )
+        )
+    totals = [float(c.p_loss_kw.sum()) for c in cases.values()]
+    fig.add_trace(
+        go.Scatter(
+            x=names,
+            y=totals,
+            mode="text",
+            text=[f"{v:,.1f}" for v in totals],
+            textposition="top center",
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    _base(
+        fig, "Pérdidas diarias por caso (línea + generador)", "Energía perdida [kWh/día]", height=400, barmode="stack"
+    )
+    fig.update_layout(hovermode="closest", bargap=0.35)
+    fig.update_yaxes(range=[0, max(totals) * 1.15])
+    return fig
+
+
 def fig_pareto(
     grid: pd.DataFrame, front: pd.DataFrame, highlights: Mapping[str, tuple[float, float, str]]
 ) -> go.Figure:
@@ -330,7 +443,90 @@ def fig_pareto(
 # ==================================================================================
 # Modo docente: triángulo de potencias y diagrama fasorial
 # ==================================================================================
-def fig_power_triangle(p_kw: float, q_l_kvar: float, q_c_kvar: float) -> go.Figure:
+# Las dos figuras usan ejes a escala 1:1 para que los ángulos se lean de verdad. Con ``constrain="domain"`` el
+# recuadro se ajusta a los rangos pedidos (calculados con los datos) en lugar de estirar los ejes hasta llenar
+# el ancho disponible, que en una gráfica a pantalla completa dejaba el diagrama diminuto en medio de un eje
+# de −4000 a 6000 V.
+PHASOR_HEIGHT = 520
+PHASOR_ZOOM_HEIGHT = 680  # cuando se agrega el panel de detalle ampliado
+ANIMATION_EXTRA_HEIGHT = 150  # botones, deslizador y más alto: a pantalla completa el alto limita el diagrama
+ZOOM_THRESHOLD = 0.35  # si la caída máxima es menor que esta fracción de |V₀ referida|, se agrega el detalle
+_TITLE_BAND_PX = 40  # franja superior reservada al título
+
+
+def _legend_under_title(height: int) -> dict[str, object]:
+    """Leyenda horizontal anclada al contenedor, justo debajo del título.
+
+    Al estar referida al contenedor (``yref="container"``) crece hacia abajo cuando se parte en más renglones
+    —en columnas angostas— y Plotly reserva ese espacio en el margen superior, así que nunca tapa el título ni
+    la gráfica, sea cual sea el ancho.
+    """
+    return {
+        "orientation": "h",
+        "yref": "container",
+        "y": 1.0 - _TITLE_BAND_PX / height,
+        "yanchor": "top",
+        "xref": "paper",
+        "x": 0.5,
+        "xanchor": "center",
+    }
+
+
+def _equal_axes(fig: go.Figure, suffix: str, x_range: Sequence[float], y_range: Sequence[float], x_title: str) -> None:
+    """Ejes a escala 1:1 con rangos fijos; el recuadro se pega arriba y se centra en horizontal."""
+    fig.update_layout(
+        **{
+            f"xaxis{suffix}": {
+                "title": {"text": x_title},
+                "range": list(x_range),
+                "constrain": "domain",
+                "zeroline": True,
+                "zerolinecolor": T.AXIS,
+            },
+            f"yaxis{suffix}": {
+                "range": list(y_range),
+                "scaleanchor": f"x{suffix}",
+                "scaleratio": 1,
+                "constrain": "domain",
+                "constraintoward": "top",
+                "zeroline": True,
+                "zerolinecolor": T.AXIS,
+            },
+        }
+    )
+
+
+def _bounding_box(
+    points: Sequence[complex], pad: float, min_ratio: float
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Caja que contiene ``points`` con margen ``pad``; ningún lado mide menos de ``min_ratio`` veces el otro."""
+    xs, ys = [z.real for z in points], [z.imag for z in points]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    margin = pad * max(x1 - x0, y1 - y0, 1e-9)
+    x0, x1, y0, y1 = x0 - margin, x1 + margin, y0 - margin, y1 + margin
+    width, height = x1 - x0, y1 - y0
+    if height < min_ratio * width:
+        extra = (min_ratio * width - height) / 2
+        y0, y1 = y0 - extra, y1 + extra
+    elif width < min_ratio * height:
+        extra = (min_ratio * height - width) / 2
+        x0, x1 = x0 - extra, x1 + extra
+    return (float(x0), float(x1)), (float(y0), float(y1))
+
+
+def fig_power_triangle(
+    p_kw: float,
+    q_l_kvar: float,
+    q_c_kvar: float,
+    height: int = PHASOR_HEIGHT,
+    p_day: Sequence[float] | None = None,
+    q_day: Sequence[float] | None = None,
+) -> go.Figure:
+    """Triángulo de potencias antes y después del banco, a escala 1:1.
+
+    Con ``p_day`` y ``q_day`` (P y Q de la carga en las 24 h) los ejes quedan fijos para todo el día: al cambiar
+    de hora el triángulo crece o se encoge, pero la escala no cambia.
+    """
     q_net = q_l_kvar - q_c_kvar
     s_before = np.hypot(p_kw, q_l_kvar)
     s_after = np.hypot(p_kw, q_net)
@@ -360,50 +556,62 @@ def fig_power_triangle(p_kw: float, q_l_kvar: float, q_c_kvar: float) -> go.Figu
         0,
         p_kw,
         q_l_kvar,
-        f"S antes = {s_before:.2f} kVA (fp {pf_b:.3f})",
+        f"S antes = {s_before:.2f} kVA (fp {pf_b:.3f} at.)",
         T.MUTED,
         "dash",
-        label=f"S antes = {s_before:.2f} kVA, fp = {pf_b:.3f}",
+        label=f"S antes = {s_before:.2f} kVA, fp = {pf_b:.3f} en atraso",
     )
+    x_qc = 1.04 * p_kw  # el tramo −Q_C se dibuja apenas a la derecha de Q_L para que no se tapen
     if q_c_kvar:
         seg(
-            p_kw + p_kw * 0.04,
+            x_qc,
             q_l_kvar,
-            p_kw + p_kw * 0.04,
+            x_qc,
             q_net,
             f"−Q_C = −{q_c_kvar:.2f} kvar",
             T.SERIES[2],
             label=f"−Q_C = −{q_c_kvar:.2f} kvar",
         )
+    state = "unit." if abs(q_net) < 1e-9 else "ad." if q_net < 0 else "at."
     seg(
         0,
         0,
         p_kw,
         q_net,
-        f"S después = {s_after:.2f} kVA (fp {pf_a:.3f} {'ad' if q_net < 0 else 'at'}.)",
+        f"S después = {s_after:.2f} kVA (fp {pf_a:.3f} {state})",
         T.SERIES[6],
-        label=f"S después = {s_after:.2f} kVA, Q_net = {q_net:.2f} kvar",
+        label=f"S después = {s_after:.2f} kVA, Q_net = {q_net:.2f} kvar, fp = {pf_a:.3f}",
     )
-    lim = max(abs(q_l_kvar), abs(q_net), p_kw) * 1.15
+
+    p_ref = float(np.max(p_day)) if p_day is not None else p_kw
+    q_all = np.asarray(q_day, dtype=float) if q_day is not None else np.array([q_l_kvar], dtype=float)
+    y_lo, y_hi = min(0.0, float(q_all.min()) - q_c_kvar), max(0.0, float(q_all.max()))
+    x_hi = 1.04 * p_ref
+    y_hi = max(y_hi, y_lo + 0.5 * x_hi)  # triángulo muy plano: se abre el eje Q
+    pad = 0.07 * max(x_hi, y_hi - y_lo)
+    # triángulo muy alto: el recuadro se ensancha (centrado) para que no quede como una franja
+    side = max(0.0, 0.62 * (y_hi - y_lo) - x_hi) / 2
+    x_range, y_range = (-pad - side, x_hi + pad + side), (y_lo - pad, y_hi + pad)
     _base(
         fig,
         "Triángulo de potencias (antes y después del banco)",
         "Q [kvar]",
-        height=420,
+        height=height,
         hovermode="closest",
-        legend={"orientation": "v", "x": 1.02, "y": 1, "xanchor": "left"},
+        legend=_legend_under_title(height),
+        margin={"l": 60, "r": 20, "t": 70, "b": 52},
     )
-    fig.update_xaxes(title="P [kW]", range=[-0.05 * lim, lim * 1.1], zeroline=True, zerolinecolor=T.AXIS)
-    fig.update_yaxes(
-        range=[min(0, q_net) - 0.1 * lim, lim], zeroline=True, zerolinecolor=T.AXIS, scaleanchor="x", scaleratio=1
-    )
+    _equal_axes(fig, "", x_range, y_range, "P [kW]")
     return fig
 
 
 def phasor_components(
     circuit: CircuitResult, params: NetworkParameters, t_index: int, demand: DemandProfile
 ) -> dict[str, complex]:
-    """Fasores referidos al lado del generador (1 kV) para la hora ``t_index`` (0-based)."""
+    """Fasores referidos al lado del generador (1 kV) para la hora ``t_index`` (0-based).
+
+    V_gen = V_0·a2/n1 + I_line·(R_eq + jX)/n1, con R_eq = R_line + R_gen·n1² (todo visto desde el generador).
+    """
     n1 = params.n1
     v_ref = circuit.v_line_receiving[t_index] / n1  # V_0 referida = 1000∠0°
     drop = circuit.i_line[t_index] * params.z_eq_line_side / n1  # caída I·Z_eq referida
@@ -432,15 +640,73 @@ def nice_current_scale(i_max_a: float, target_v: float = 550.0) -> float:
     return float(nice * 10**exp)
 
 
-def _phasor_traces(ph: Mapping[str, complex], i_scale: float) -> list[go.Scatter]:
+def _day_phasors(circuit: CircuitResult, params: NetworkParameters, demand: DemandProfile) -> list[dict[str, complex]]:
+    return [phasor_components(circuit, params, t, demand) for t in range(demand.n_hours)]
+
+
+def _day_current_scale(all_ph: Sequence[Mapping[str, complex]]) -> float:
+    return nice_current_scale(max(max(abs(p["I_gen"]), abs(p["I_load_sin_QC"])) for p in all_ph))
+
+
+@dataclass(frozen=True, slots=True)
+class PhasorView:
+    """Rangos de los ejes del diagrama fasorial, comunes a las 24 horas de un mismo caso.
+
+    ``zoom_x`` / ``zoom_y`` son el detalle ampliado de la punta de V₀; solo existen cuando las caídas son
+    pequeñas frente a V₀ referida (línea a 66 kV), porque a escala completa no se distinguen.
+    """
+
+    x: tuple[float, float]
+    y: tuple[float, float]
+    zoom_x: tuple[float, float] | None = None
+    zoom_y: tuple[float, float] | None = None
+
+    @property
+    def has_zoom(self) -> bool:
+        return self.zoom_x is not None
+
+
+def phasor_view(all_ph: Sequence[Mapping[str, complex]], i_scale: float, params: NetworkParameters) -> PhasorView:
+    """Vista del diagrama: caja que contiene todos los fasores del día y, si hace falta, el detalle ampliado."""
+    points: list[complex] = []
+    for ph in all_ph:
+        v0 = ph["V0_ref"]
+        points += [0j, v0, v0 + ph["drop_R"], ph["V_gen"], ph["I_gen"] * i_scale, ph["I_load_sin_QC"] * i_scale]
+    x, y = _bounding_box(points, pad=0.07, min_ratio=0.45)
+    v_ref = max(abs(ph["V0_ref"]) for ph in all_ph)
+    if max(abs(ph["drop"]) for ph in all_ph) >= ZOOM_THRESHOLD * v_ref:
+        return PhasorView(x, y)
+    tips: list[complex] = []
+    for ph in all_ph:
+        v0, v_gen = ph["V0_ref"], ph["V_gen"]
+        tips += [v0, v0 + ph["drop_R"], v_gen]
+        direction = v_gen / abs(v_gen)
+        # límites de la banda sobre la dirección de V_gen, si quedan cerca de la punta
+        tips += [
+            lim * direction for lim in (params.v_gen_min, params.v_gen_max) if abs(lim - abs(v_gen)) <= 0.25 * v_ref
+        ]
+    zoom_x, zoom_y = _bounding_box(tips, pad=0.10, min_ratio=0.62)
+    return PhasorView(x, y, zoom_x, zoom_y)
+
+
+def _phasor_traces(
+    ph: Mapping[str, complex], i_scale: float, axis: str = "", showlegend: bool = True
+) -> list[go.Scatter]:
+    """Los siete fasores de una hora. ``axis="2"`` los dibuja en el panel de detalle (sin repetir la leyenda)."""
+
     def arrow(
         z0: complex, z1: complex, name: str, color: str, dash: str = "solid", width: float = 3, hover: str = ""
     ) -> go.Scatter:
+        z0, z1 = complex(z0), complex(z1)
         return go.Scatter(
             x=[z0.real, z1.real],
             y=[z0.imag, z1.imag],
             mode="lines+markers",
             name=name,
+            legendgroup=name,
+            showlegend=showlegend,
+            xaxis=f"x{axis}",
+            yaxis=f"y{axis}",
             line={"color": color, "width": width, "dash": dash},
             marker={"symbol": ["circle", "arrow"], "angleref": "previous", "size": [3, 15], "color": color},
             hovertemplate=hover + "<extra></extra>",
@@ -452,7 +718,13 @@ def _phasor_traces(ph: Mapping[str, complex], i_scale: float) -> list[go.Scatter
     v_ref, drop, v_gen = ph["V0_ref"], ph["drop"], ph["V_gen"]
     tip_r = v_ref + ph["drop_R"]
     return [
-        arrow(0, v_ref, "V₀ referida (1000∠0° V)", T.SERIES[0], hover=f"V₀·a₂/n₁ = {polar(v_ref, 'V')}"),
+        arrow(
+            0,
+            v_ref,
+            f"V₀ referida ({abs(v_ref):,.0f}∠0° V)".replace(",", ""),
+            T.SERIES[0],
+            hover=f"V₀·a₂/n₁ = {polar(v_ref, 'V')}",
+        ),
         arrow(
             v_ref,
             tip_r,
@@ -496,65 +768,144 @@ def _phasor_traces(ph: Mapping[str, complex], i_scale: float) -> list[go.Scatter
     ]
 
 
-def _phasor_layout(fig: go.Figure, params: NetworkParameters, title: str, lim: float) -> None:
-    theta = np.linspace(0, np.pi, 200)
-    for r, txt in ((params.v_gen_min, f"{params.v_gen_min:g} V"), (params.v_gen_max, f"{params.v_gen_max:g} V")):
-        fig.add_trace(
-            go.Scatter(
-                x=r * np.cos(theta),
-                y=r * np.sin(theta),
-                mode="lines",
-                name=f"|V| = {txt}",
-                line={"color": T.GOOD, "width": 1, "dash": "dot"},
-                hoverinfo="skip",
-                showlegend=False,
-            )
+def _phasor_hour_traces(ph: Mapping[str, complex], i_scale: float, with_zoom: bool) -> list[go.Scatter]:
+    traces = _phasor_traces(ph, i_scale)
+    if with_zoom:
+        traces += _phasor_traces(ph, i_scale, axis="2", showlegend=False)
+    return traces
+
+
+def _band_traces(params: NetworkParameters, axis: str = "", showlegend: bool = True) -> list[go.Scatter]:
+    """Círculos |V| = V_mín y |V| = V_máx (completos: V_gen puede quedar por debajo del eje real)."""
+    theta = np.linspace(0.0, 2.0 * np.pi, 361)
+    name = f"Banda |V| = {params.v_gen_min:g} y {params.v_gen_max:g} V"
+    return [
+        go.Scatter(
+            x=r * np.cos(theta),
+            y=r * np.sin(theta),
+            mode="lines",
+            name=name,
+            legendgroup="banda",
+            showlegend=showlegend and k == 0,
+            xaxis=f"x{axis}",
+            yaxis=f"y{axis}",
+            line={"color": T.GOOD, "width": 1.2, "dash": "dot"},
+            hoverinfo="skip",
         )
+        for k, r in enumerate((params.v_gen_min, params.v_gen_max))
+    ]
+
+
+def _phasor_figure(
+    all_ph: Sequence[Mapping[str, complex]],
+    t_index: int,
+    params: NetworkParameters,
+    i_scale: float,
+    title: str,
+    animated: bool,
+) -> tuple[go.Figure, PhasorView, int]:
+    """Figura base del diagrama fasorial. Devuelve (figura, vista, número de trazas que cambian con la hora)."""
+    view = phasor_view(all_ph, i_scale, params)
+    dynamic = _phasor_hour_traces(all_ph[t_index], i_scale, view.has_zoom)
+    fig = go.Figure(dynamic)
+    fig.add_traces(_band_traces(params))
+    height = PHASOR_HEIGHT
+    if view.has_zoom:
+        height = PHASOR_ZOOM_HEIGHT
+        fig.add_traces(_band_traces(params, axis="2", showlegend=False))
+        fig.update_layout(
+            xaxis={"anchor": "y", "domain": [0.0, 1.0]},
+            yaxis={"anchor": "x", "domain": [0.63, 1.0]},
+            xaxis2={"anchor": "y2", "domain": [0.0, 1.0]},
+            yaxis2={"anchor": "x2", "domain": [0.0, 0.44]},
+        )
+    if animated:
+        height += ANIMATION_EXTRA_HEIGHT
     _base(
         fig,
         title,
         "Im [V]",
-        height=520,
+        height=height,
         hovermode="closest",
-        legend={"orientation": "v", "x": 1.02, "y": 1, "xanchor": "left"},
+        legend=_legend_under_title(height),
+        margin={"l": 60, "r": 20, "t": 70, "b": 128 if animated else 52},
     )
-    fig.update_xaxes(title="Re [V]", range=[-0.45 * lim, 1.05 * lim], zeroline=True, zerolinecolor=T.AXIS)
-    fig.update_yaxes(range=[-0.45 * lim, 0.9 * lim], zeroline=True, zerolinecolor=T.AXIS, scaleanchor="x", scaleratio=1)
+    # con panel de detalle, el título «Re [V]» va solo en el eje inferior para no chocar con su rótulo
+    _equal_axes(fig, "", view.x, view.y, "" if view.has_zoom else "Re [V]")
+    if view.has_zoom:
+        _equal_axes(fig, "2", view.zoom_x, view.zoom_y, "Re [V]")  # type: ignore[arg-type]
+        (zx0, zx1), (zy0, zy1) = view.zoom_x, view.zoom_y  # type: ignore[misc]
+        fig.add_shape(
+            type="rect",
+            xref="x",
+            yref="y",
+            x0=zx0,
+            x1=zx1,
+            y0=zy0,
+            y1=zy1,
+            line={"color": T.MUTED, "width": 1, "dash": "dot"},
+        )
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.44,
+            yanchor="bottom",
+            yshift=8,
+            showarrow=False,
+            text="Detalle ampliado del recuadro: punta de V₀ y caídas",
+            font={"size": 12},
+        )
+        y_label = zy1 - 0.07 * (zy1 - zy0)
+        for limit in (params.v_gen_min, params.v_gen_max):  # en el detalle los círculos parecen rectas
+            if abs(y_label) < limit and zx0 < (x_label := float(np.sqrt(limit**2 - y_label**2))) < zx1:
+                right = x_label > 0.5 * (zx0 + zx1)  # el rótulo va hacia el interior del panel
+                fig.add_annotation(
+                    xref="x2",
+                    yref="y2",
+                    x=x_label,
+                    y=y_label,
+                    xanchor="right" if right else "left",
+                    xshift=-4 if right else 4,
+                    showarrow=False,
+                    text=f"|V| = {limit:g} V",
+                    font={"size": 11, "color": T.GOOD},
+                )
+    return fig, view, len(dynamic)
 
 
 def fig_phasor_diagram(
     circuit: CircuitResult, params: NetworkParameters, demand: DemandProfile, t_index: int, i_scale: float | None = None
 ) -> go.Figure:
-    ph = phasor_components(circuit, params, t_index, demand)
-    if i_scale is None:
-        i_scale = nice_current_scale(max(abs(ph["I_gen"]), abs(ph["I_load_sin_QC"])))
-    fig = go.Figure(_phasor_traces(ph, i_scale))
-    lim = max(abs(ph["V_gen"]), abs(ph["V0_ref"] + ph["drop"]), params.v_gen_max) * 1.08
-    _phasor_layout(fig, params, f"Diagrama fasorial referido al generador — hora {t_index + 1}", lim)
-    return fig
+    """Diagrama fasorial de la hora ``t_index`` (0-based), referido al generador.
+
+    Los ejes y la escala de las corrientes son los del día completo, así que al cambiar de hora solo se mueven
+    los fasores. Si las caídas son pequeñas frente a V₀ referida se agrega un panel con el detalle ampliado.
+    """
+    all_ph = _day_phasors(circuit, params, demand)
+    scale = i_scale if i_scale is not None else _day_current_scale(all_ph)
+    title = f"Diagrama fasorial referido al generador — hora {t_index + 1}"
+    return _phasor_figure(all_ph, t_index, params, scale, title, animated=False)[0]
+
+
+def _animation_title(hour: int, v_gen: complex) -> str:
+    return f"Diagrama fasorial — hora {hour}  |  |V_gen| = {abs(v_gen):,.1f} V"
 
 
 def fig_phasor_animation(
     circuits_by_hour: CircuitResult, params: NetworkParameters, demand: DemandProfile, i_scale: float | None = None
 ) -> go.Figure:
-    """Diagrama fasorial animado de 24 horas (botones ▶ / ⏸ y deslizador)."""
+    """Diagrama fasorial animado de 24 horas (botones Reproducir / Pausa y deslizador)."""
     n = demand.n_hours
-    all_ph = [phasor_components(circuits_by_hour, params, t, demand) for t in range(n)]
-    if i_scale is None:
-        i_scale = nice_current_scale(max(max(abs(p["I_gen"]), abs(p["I_load_sin_QC"])) for p in all_ph))
-    lim = max(max(abs(p["V_gen"]), abs(p["V0_ref"] + p["drop"])) for p in all_ph)
-    lim = max(lim, params.v_gen_max) * 1.08
-    fig = go.Figure(_phasor_traces(all_ph[0], i_scale))
-    n_dyn = len(fig.data)
-    _phasor_layout(fig, params, "Diagrama fasorial animado (24 h) — referido al generador", lim)
+    all_ph = _day_phasors(circuits_by_hour, params, demand)
+    scale = i_scale if i_scale is not None else _day_current_scale(all_ph)
+    fig, view, n_dyn = _phasor_figure(all_ph, 0, params, scale, _animation_title(1, all_ph[0]["V_gen"]), animated=True)
     fig.frames = [
         go.Frame(
-            data=_phasor_traces(all_ph[t], i_scale),
+            data=_phasor_hour_traces(all_ph[t], scale, view.has_zoom),
             traces=list(range(n_dyn)),
             name=str(t + 1),
-            layout={
-                "title": {"text": f"Diagrama fasorial — hora {t + 1}  |  |V_gen| = {abs(all_ph[t]['V_gen']):,.1f} V"}
-            },
+            layout={"title": {"text": _animation_title(t + 1, all_ph[t]["V_gen"])}},
         )
         for t in range(n)
     ]
@@ -564,11 +915,21 @@ def fig_phasor_animation(
                 "type": "buttons",
                 "direction": "left",
                 "x": 0,
-                "y": -0.12,
                 "xanchor": "left",
+                "y": 0,
+                "yanchor": "top",
+                # Botón claro con texto oscuro: Plotly pinta el botón activo y el :hover con un fondo
+                # claro fijo (#F4FAFF), así que un texto claro quedaría invisible en tema oscuro.
+                "showactive": False,
+                "bgcolor": T.BUTTON_BG,
+                "bordercolor": T.BUTTON_BORDER,
+                "borderwidth": 1,
+                "font": {"color": T.BUTTON_INK, "size": 13},
+                # la separación va en píxeles para que no dependa del alto de la figura
+                "pad": {"t": 78, "b": 4},
                 "buttons": [
                     {
-                        "label": "▶ Play",
+                        "label": "Reproducir",
                         "method": "animate",
                         "args": [
                             None,
@@ -580,7 +941,7 @@ def fig_phasor_animation(
                         ],
                     },
                     {
-                        "label": "⏸ Pausa",
+                        "label": "Pausa",
                         "method": "animate",
                         "args": [[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}],
                     },
@@ -589,10 +950,16 @@ def fig_phasor_animation(
         ],
         sliders=[
             {
-                "x": 0.18,
-                "y": -0.08,
-                "len": 0.8,
-                "currentvalue": {"prefix": "Hora: "},
+                "x": 0,
+                "len": 1.0,
+                "y": 0,
+                "yanchor": "top",
+                "pad": {"l": 170, "t": 52},
+                "currentvalue": {"prefix": "Hora: ", "xanchor": "right"},
+                "bgcolor": T.BUTTON_BORDER,
+                "activebgcolor": T.BUTTON_BG,
+                "bordercolor": T.BUTTON_BORDER,
+                "tickcolor": T.BUTTON_BORDER,
                 "steps": [
                     {
                         "label": str(t + 1),
@@ -603,7 +970,6 @@ def fig_phasor_animation(
                 ],
             }
         ],
-        margin={"b": 110},
     )
     return fig
 
@@ -691,30 +1057,29 @@ def fig_reactance_scan(scan: pd.DataFrame, x_current: float, x_critical: float |
 
 
 # ==================================================================================
-# Diagrama de circuito (SVG)
+# Diagrama de circuito (SVG) — fiel a la Figura 2 del enunciado
 # ==================================================================================
-# Paleta del diagrama unifilar: tarjeta oscura propia, visible en ambos modos de la app.
-_SVG_CARD = "#181A1F"
-_SVG_BORDER = "#2A2E36"
+# Tarjeta oscura propia: trazo y texto #E2E8F0 sobre #0F172A (contraste 13:1), visible en ambos temas.
+_SVG_CARD = "#0F172A"
+_SVG_BORDER = "#334155"
 _SVG_WIRE = "#E2E8F0"
-_SVG_MUTED = "#94A3B8"
-_SVG_VALUE = "#F1F5F9"
-_SVG_ACCENT = "#60A5FA"  # flujo de corriente
+_SVG_MUTED = "#A8B5C7"
+_SVG_VALUE = "#F8FAFC"
+_SVG_ACCENT = "#38BDF8"  # flechas y valores de corriente
 _SVG_OK = "#4ADE80"
 _SVG_BAD = "#F87171"
-
-
-_SVG_CYAN = "#38BDF8"  # banco de capacitores
 _SVG_WARN = "#FBBF24"  # fp en adelanto (sobrecompensado)
+_SVG_OFF = "#64748B"  # rama del banco cuando Q_C = 0
 
-_SVG_W, _SVG_H = 1080, 440
-_LBL, _VAL, _SMALL = 15, 17, 13  # tamaños de texto (unidades del viewBox) legibles a ancho completo
-_STROKE = 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"'
+_SVG_W, _SVG_H = 1080, 408
+_Y_TOP, _Y_BOT = 112, 252  # conductor superior y conductor de retorno
+_LBL, _VAL, _SMALL = 15, 14, 13  # tamaños de texto (unidades del viewBox)
+_STROKE = 'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" fill="none"'
 
 
 def _sub(base: str, sub: str) -> str:
-    """Texto con subíndice SVG (sin guiones bajos literales)."""
-    return f'{base}<tspan baseline-shift="sub" font-size="11">{sub}</tspan>'
+    """Texto con subíndice SVG (desplazamiento ``dy``, compatible con todos los navegadores)."""
+    return f'{base}<tspan dy="4" font-size="0.74em">{sub}</tspan><tspan dy="-4">&#8203;</tspan>'
 
 
 def _svg_text(
@@ -733,15 +1098,7 @@ def _svg_text(
     )
 
 
-def _value(x: float, y: float, body: str, *, color: str = _SVG_VALUE, anchor: str = "middle") -> str:
-    return _svg_text(x, y, body, color=color, size=_VAL, weight=600, anchor=anchor)
-
-
-def _small(x: float, y: float, body: str, *, color: str = _SVG_MUTED, anchor: str = "middle", weight: int = 400) -> str:
-    return _svg_text(x, y, body, color=color, size=_SMALL, weight=weight, anchor=anchor)
-
-
-def _wire(x1: float, y1: float, x2: float, y2: float, color: str = _SVG_WIRE, width: float = 1.8) -> str:
+def _wire(x1: float, y1: float, x2: float, y2: float, color: str = _SVG_WIRE, width: float = 1.9) -> str:
     return (
         f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{color}" stroke-width="{width}" '
         'stroke-linecap="round"/>'
@@ -752,22 +1109,13 @@ def _path(d: str, color: str = _SVG_WIRE) -> str:
     return f'<path d="{d}" stroke="{color}" {_STROKE}/>'
 
 
-def _flow_arrow(x1: float, x2: float, y: float) -> str:
-    """Flecha de sentido de corriente (acento sutil)."""
-    return (
-        _wire(x1, y, x2 - 9, y, _SVG_ACCENT, 1.6)
-        + f'<path d="M{x2 - 10},{y - 5} L{x2},{y} L{x2 - 10},{y + 5} Z" fill="{_SVG_ACCENT}"/>'
-    )
+def _node(x: float, y: float, color: str = _SVG_WIRE) -> str:
+    return f'<circle cx="{x}" cy="{y}" r="3" fill="{color}"/>'
 
 
-# -- Símbolos IEEE/IEC ---------------------------------------------------------------
-def _ground(x: float, y: float, color: str = _SVG_WIRE) -> str:
-    """Tierra (tres trazos decrecientes) con el borne superior en (x, y)."""
-    return (
-        _wire(x - 13, y, x + 13, y, color)
-        + _wire(x - 8, y + 5, x + 8, y + 5, color)
-        + _wire(x - 3, y + 10, x + 3, y + 10, color)
-    )
+def _current_arrow(x: float, y: float) -> str:
+    """Punta de flecha sobre el conductor (sentido de la corriente), como en la Figura 2."""
+    return f'<path d="M{x - 9},{y - 6} L{x + 6},{y} L{x - 9},{y + 6} Z" fill="{_SVG_ACCENT}"/>'
 
 
 def _resistor_h(x0: float, x1: float, y: float, n: int = 6, amp: float = 8) -> str:
@@ -782,19 +1130,8 @@ def _resistor_h(x0: float, x1: float, y: float, n: int = 6, amp: float = 8) -> s
     return _path(" ".join(pts))
 
 
-def _resistor_v(x: float, y0: float, y1: float, n: int = 5, amp: float = 7) -> str:
-    lead = 6
-    seg = (y1 - y0 - 2 * lead) / n
-    ys = y0 + lead
-    pts = [f"M{x},{y0}", f"L{x},{ys}"]
-    for k in range(n):
-        pts += [f"L{x + amp},{ys + seg * (k + 0.25):.1f}", f"L{x - amp},{ys + seg * (k + 0.75):.1f}"]
-    pts += [f"L{x},{ys + seg * n:.1f}", f"L{x},{y1}"]
-    return _path(" ".join(pts))
-
-
 def _inductor_h(x0: float, x1: float, y: float, n: int = 4) -> str:
-    """Bobina (espiras semicirculares) horizontal."""
+    """Inductor en espiras (semicírculos) horizontal."""
     lead = 6
     r = (x1 - x0 - 2 * lead) / (2 * n)
     arcs = " ".join(f"a{r:.2f},{r:.2f} 0 0 1 {2 * r:.2f},0" for _ in range(n))
@@ -809,83 +1146,64 @@ def _coil_v(x: float, y0: float, y1: float, n: int = 4, bulge_right: bool = True
     return _path(f"M{x},{y0} {arcs}")
 
 
-def _ac_source(cx: float, cy: float, r: float = 24) -> str:
-    sine = f"M{cx - 13},{cy} q6.5,-13 13,0 t13,0"
+def _voltage_source(x: float, r: float = 22) -> str:
+    """Fuente V_gen: círculo con + arriba y − abajo, entre el conductor superior y el de retorno."""
+    cy = (_Y_TOP + _Y_BOT) / 2
     return (
-        f'<circle cx="{cx}" cy="{cy}" r="{r}" stroke="{_SVG_WIRE}" {_STROKE}/>'
-        + _path(sine)
-        + _svg_text(cx - r - 10, cy - 8, "+", color=_SVG_VALUE, size=_VAL, weight=600)
-        + _svg_text(cx - r - 10, cy + 20, "−", color=_SVG_VALUE, size=_VAL, weight=600)
+        _wire(x, _Y_TOP, x, cy - r)
+        + f'<circle cx="{x}" cy="{cy}" r="{r}" stroke="{_SVG_WIRE}" {_STROKE}/>'
+        + _svg_text(x, cy - 3, "+", color=_SVG_VALUE, size=17, weight=600)
+        + _svg_text(x, cy + 16, "−", color=_SVG_VALUE, size=17, weight=600)
+        + _wire(x, cy + r, x, _Y_BOT)
     )
 
 
-def _transformer(cx: float, y_bus: float, y0: float, y1: float, y_gnd: float) -> str:
-    """Transformador: devanados en espiras, núcleo de dos barras y puntos de polaridad."""
-    xp, xs = cx - 14, cx + 14
-    dot = 'r="3.2" fill="' + _SVG_WIRE + '"'
+def _transformer(cx: float) -> str:
+    """Transformador de la Figura 2: dos devanados en espiras, núcleo de dos líneas y puntos de polaridad."""
+    xp, xs = cx - 30, cx + 30
+    y0, y1 = _Y_TOP + 30, _Y_BOT - 30
+    dot = f'r="3.4" fill="{_SVG_WIRE}"'
     return "".join(
         [
-            _wire(xp, y_bus, xp, y0),
+            _wire(xp, _Y_TOP, xp, y0),
             _coil_v(xp, y0, y1, bulge_right=True),
-            _wire(xp, y1, xp, y_gnd),
-            _ground(xp, y_gnd),
-            _wire(cx - 3, y0 - 4, cx - 3, y1 + 4, width=2.2),
-            _wire(cx + 3, y0 - 4, cx + 3, y1 + 4, width=2.2),
-            _wire(xs, y_bus, xs, y0),
+            _wire(xp, y1, xp, _Y_BOT),
+            _wire(cx - 3.5, y0, cx - 3.5, y1, width=2.2),
+            _wire(cx + 3.5, y0, cx + 3.5, y1, width=2.2),
+            _wire(xs, _Y_TOP, xs, y0),
             _coil_v(xs, y0, y1, bulge_right=False),
-            _wire(xs, y1, xs, y_gnd),
-            _ground(xs, y_gnd),
-            f'<circle cx="{xp - 10}" cy="{y0 + 4}" {dot}/>',
-            f'<circle cx="{xs + 10}" cy="{y0 + 4}" {dot}/>',
+            _wire(xs, y1, xs, _Y_BOT),
+            f'<circle cx="{cx - 13}" cy="{y0 - 5}" {dot}/>',
+            f'<circle cx="{cx + 13}" cy="{y0 - 5}" {dot}/>',
         ]
     )
 
 
-def _capacitor_v(x: float, y_top: float, y_gnd: float, active: bool) -> str:
-    color = _SVG_CYAN
-    op = "1" if active else "0.45"
-    yp = (y_top + y_gnd) / 2 + 8
-    body = (
-        _wire(x, y_top, x, yp - 6, color)
-        + _wire(x - 18, yp - 6, x + 18, yp - 6, color, 3)
-        + _wire(x - 18, yp + 6, x + 18, yp + 6, color, 3)
-        + _wire(x, yp + 6, x, y_gnd, color)
-        + _ground(x, y_gnd, color)
-    )
-    return f'<g opacity="{op}">{body}</g>'
-
-
-def _motor(x: float, y_top: float, y_gnd: float) -> str:
-    cy = (y_top + y_gnd) / 2 + 6
+def _load_branch(x: float, label: str) -> str:
+    """Rama de carga en derivación (bloque de impedancia) con su etiqueta a la derecha."""
+    ya, yb = _Y_TOP + 38, _Y_BOT - 38
     return (
-        _wire(x, y_top, x, cy - 24)
-        + f'<circle cx="{x}" cy="{cy}" r="24" stroke="{_SVG_WIRE}" {_STROKE}/>'
-        + _svg_text(x, cy + 6, "M", color=_SVG_VALUE, size=_VAL, weight=600)
-        + _wire(x, cy + 24, x, y_gnd)
-        + _ground(x, y_gnd)
+        _wire(x, _Y_TOP, x, ya)
+        + f'<rect x="{x - 9}" y="{ya}" width="18" height="{yb - ya}" stroke="{_SVG_WIRE}" {_STROKE}/>'
+        + _wire(x, yb, x, _Y_BOT)
+        + _svg_text(x + 17, (ya + yb) / 2 + 5, label, color=_SVG_VALUE, anchor="start", weight=600)
     )
 
 
-def _r_parallel_l(x: float, y_top: float, y_gnd: float) -> str:
-    """Carga residencial R ‖ L a tierra."""
-    xl, xr = x - 20, x + 20
-    ys, ye = y_top + 32, y_gnd - 30
-    return "".join(
-        [
-            _wire(x, y_top, x, ys),
-            _wire(xl, ys, xr, ys),
-            _wire(xl, ys, xl, ys + 8),
-            _resistor_v(xl, ys + 8, ye - 8),
-            _wire(xl, ye - 8, xl, ye),
-            _wire(xr, ys, xr, ys + 8),
-            _coil_v(xr, ys + 8, ye - 8, n=4, bulge_right=True),
-            _wire(xr, ye - 8, xr, ye),
-            _wire(xl, ye, xr, ye),
-            _wire(x, ye, x, y_gnd),
-            _ground(x, y_gnd),
-            f'<circle cx="{x}" cy="{y_top}" r="4" fill="{_SVG_WIRE}"/>',
-        ]
+def _capacitor_branch(x: float, active: bool) -> str:
+    """Rama del banco Q_C; atenuada y con trazo discontinuo cuando Q_C = 0."""
+    color = _SVG_WIRE if active else _SVG_OFF
+    mid = (_Y_TOP + _Y_BOT) / 2
+    dash = "" if active else ' stroke-dasharray="5 5"'
+    lead = (
+        f'<line x1="{x}" y1="{_Y_TOP}" x2="{x}" y2="{mid - 5}" stroke="{color}" stroke-width="1.9"{dash}/>'
+        f'<line x1="{x}" y1="{mid + 5}" x2="{x}" y2="{_Y_BOT}" stroke="{color}" stroke-width="1.9"{dash}/>'
     )
+    plates = _wire(x - 15, mid - 5, x + 15, mid - 5, color, 2.6) + _wire(x - 15, mid + 5, x + 15, mid + 5, color, 2.6)
+    label = _svg_text(
+        x + 22, mid + 5, _sub("Q", "C"), color=_SVG_VALUE if active else _SVG_MUTED, anchor="start", weight=600
+    )
+    return lead + plates + label
 
 
 def _fmt(x: float, d: int = 2) -> str:
@@ -907,6 +1225,21 @@ def pf_label(s: complex, tol: float = 1e-9) -> tuple[str, bool]:
     return f"{pf:.3f} (en atraso)", True
 
 
+def _pf_short(s: complex, tol: float = 1e-9) -> tuple[str, bool]:
+    pf = abs(s.real) / max(abs(s), 1e-12)
+    if s.imag < -tol:
+        return f"{pf:.3f} (adelanto)", False
+    return f"{pf:.3f} ({'unitario' if abs(s.imag) <= tol else 'atraso'})", True
+
+
+def _readout(x: float, title: str, rows: Sequence[tuple[str, str]]) -> str:
+    """Columna de lecturas bajo el esquema: título y hasta tres renglones (texto, color)."""
+    out = [_svg_text(x, 316, title, color=_SVG_VALUE, size=_SMALL, weight=600, anchor="start")]
+    for k, (body, color) in enumerate(rows):
+        out.append(_svg_text(x, 340 + 22 * k, body, color=color, size=_SMALL, anchor="start"))
+    return "".join(out)
+
+
 def circuit_svg(
     params: NetworkParameters,
     circuit: CircuitResult,
@@ -914,13 +1247,17 @@ def circuit_svg(
     problem2: bool = True,
     font_css: str = "",
     demand: DemandProfile | None = None,
+    title: str | None = None,
 ) -> str:
-    """Esquemático SVG autónomo con simbología IEEE/IEC (tarjeta oscura, atributos inline).
+    """Esquemático SVG autónomo, fiel a la Figura 2 del enunciado («Distribution system with two loads»).
 
-    Fuente AC con tierra, resistencias en zigzag, inductancia de línea en espiras, T1/T2 con devanados,
-    núcleo y puntos de polaridad, y barra secundaria con las ramas L1 (R‖L), L2 (motor) y Q_C a tierra.
-    Se devuelve un ``<svg>`` completo para mostrarlo como imagen (``st.image``), así no pasa por el
-    sanitizador HTML; ``font_css`` permite incrustar ``@font-face``.
+    Fuente V_gen (+/−) en serie con la resistencia en zigzag de 0.5 Ω; transformador T1 (1kV:13.2kV, o
+    1kV:66kV en el Problema 2.1, según ``params``); línea con resistencia en zigzag de 80 Ω en serie con el
+    inductor j900 Ω y la flecha I_line; transformador T2 (13.2kV:120V o 66kV:120V);
+    lado de carga con V_0 (+/−), la flecha I_load y las ramas en derivación L1, L2 y Q_C cerradas por el
+    conductor de retorno. Con ``problem2=False`` se dibuja la red directa (sin transformadores ni banco).
+    Bajo el esquema van las lecturas de la hora ``t_index``. Se devuelve un ``<svg>`` completo para
+    mostrarlo como imagen (``st.image``); ``font_css`` permite incrustar ``@font-face``.
     """
     t = t_index
     demand = demand or DemandProfile.default()
@@ -932,117 +1269,153 @@ def circuit_svg(
     qc = float(circuit.q_c_kvar[t])
     s1 = complex(demand.p1_kw[t], demand.q1_kvar[t])
     s2 = complex(demand.p2_kw[t], demand.q2_kvar[t])
-    s_load = s1 + s2
     ok = params.v_gen_min <= v_g <= params.v_gen_max
     v_col = (_SVG_OK if ok else _SVG_BAD) if problem2 else _SVG_VALUE
+    active = problem2 and qc > 1e-9
 
-    y, y_g = 130, 282  # conductor principal y cota de tierra
-    x_src, x_rg, x_t1, x_z, x_t2 = 60, 132, 240, 390, 540
-    x_bus0, x_l1, x_l2, x_qc = 590, 705, 865, 1005
-    x_bus1 = 1052 if problem2 else 930
+    y, yb, y_lbl = _Y_TOP, _Y_BOT, _Y_TOP - 26
+    x_src, x_t1, x_t2 = 84, 276, 626
+    rg0, rg1 = 136, 206  # resistencia de 0.5 Ω
+    rl0, rl1 = 352, 422  # resistencia de 80 Ω
+    x_arrow = 447  # flecha I_line
+    xl0, xl1 = 472, 552  # inductor j900 Ω
+    x_iload, x_l1, x_l2, x_qc = 712, 800, 890, 985
+    x_end = x_qc if problem2 else x_l2
+    mid = (y + yb) / 2
 
+    if title is None:
+        title = "Figura 2 — Sistema de distribución con dos cargas" if problem2 else "Problema 1 — Red directa a 120 V"
+    title = f"{title} · hora {t + 1}"
     parts = [
         f'<rect x="1" y="1" width="{_SVG_W - 2}" height="{_SVG_H - 2}" rx="10" fill="{_SVG_CARD}" '
         f'stroke="{_SVG_BORDER}"/>',
-        # Fuente AC a tierra
-        _wire(x_src, y, x_src, 181),
-        _ac_source(x_src, 205),
-        _wire(x_src, 229, x_src, y_g),
-        _ground(x_src, y_g),
-        _small(x_src, 316, "Generador"),
-        _svg_text(94, 196, "|" + _sub("V", "gen") + "|", anchor="start"),
-        _value(94, 220, f"{_fmt(v_g, 1)} V", color=v_col, anchor="start"),
-        # Rgen en zigzag
-        _wire(x_src, y, x_rg - 34, y),
-        _resistor_h(x_rg - 34, x_rg + 34, y),
-        _svg_text(x_rg, y - 22, _sub("R", "gen") + " = 0.5 Ω"),
-        _value(x_rg, y + 34, f"{_fmt(pg, 3)} kW"),
-        # Línea: R en zigzag + inductancia en espiras (en serie)
-        _resistor_h(x_z - 80, x_z - 10, y),
-        _inductor_h(x_z - 4, x_z + 80, y),
-        _svg_text(x_z, y - 34, _sub("Z", "line") + " = 80 + j900 Ω"),
-        _small(x_z - 45, y + 26, "80 Ω"),
-        _small(x_z + 38, y + 26, "j900 Ω"),
-        _value(x_z, y + 62, _sub("P", "loss") + f" = {_fmt(pl, 3)} kW"),
-        _svg_text(x_z, y + 86, _sub("Q", "loss") + f" = {_fmt(ql, 3)} kvar"),
-        _small(x_z, 316, "Línea 13.2 kV" if problem2 else "Línea a 120 V"),
-        # Barra secundaria (barraje) a V0
-        f'<line x1="{x_bus0}" y1="{y}" x2="{x_bus1}" y2="{y}" stroke="{_SVG_WIRE}" stroke-width="6" '
-        'stroke-linecap="round"/>',
-        _svg_text(
-            x_bus0 + 4,
-            y - 16,
-            ("Barra secundaria · " if problem2 else "Barra de carga · ") + _sub("V", "0") + " = 120∠0° V",
-            anchor="start",
-        ),
-        # Ramas L1 (R ‖ L) y L2 (motor) a tierra
-        _r_parallel_l(x_l1, y, y_g),
-        _svg_text(x_l1, 316, "L1 Residencial", color=_SVG_VALUE, size=_SMALL, weight=600),
-        _small(x_l1, 336, f"{_fmt(s1.real, 1)} + j{_fmt(s1.imag, 2)} kVA"),
-        _small(x_l1, 354, f"fp1 {demand.pf1[t]:.2f} (atraso)"),
-        f'<circle cx="{x_l2}" cy="{y}" r="4" fill="{_SVG_WIRE}"/>',
-        _motor(x_l2, y, y_g),
-        _svg_text(x_l2, 316, "L2 Industrial", color=_SVG_VALUE, size=_SMALL, weight=600),
-        _small(x_l2, 336, f"{_fmt(s2.real, 1)} + j{_fmt(s2.imag, 2)} kVA"),
-        _small(x_l2, 354, f"fp2 {demand.pf2[t]:.2f} (atraso)" if s2.real > 0 else "fuera de servicio"),
-        # Separador y franja inferior: potencia de carga vs. flujo neto en la barra
-        _wire(20, 372, _SVG_W - 20, 372, _SVG_BORDER, 1),
-        _svg_text(
-            20,
-            398,
-            _sub("S", "carga") + " (L1 + L2) = " + _complex_kva(s_load) + f" · fp {pf_label(s_load)[0]}",
-            anchor="start",
-        ),
+        _svg_text(24, 34, title, color=_SVG_MUTED, size=_SMALL, anchor="start"),
+        # Fuente V_gen y resistencia de 0.5 Ω
+        _voltage_source(x_src),
+        _svg_text(x_src - 30, mid + 5, _sub("V", "gen"), color=_SVG_VALUE, anchor="end", weight=600),
+        _wire(x_src, y, rg0, y),
+        _resistor_h(rg0, rg1, y),
+        _svg_text((rg0 + rg1) / 2, y_lbl, "0.5 Ω", color=_SVG_VALUE),
+        # Línea: 80 Ω en zigzag + flecha I_line + inductor j900 Ω
+        _resistor_h(rl0, rl1, y),
+        _svg_text((rl0 + rl1) / 2, y_lbl, "80 Ω", color=_SVG_VALUE),
+        _wire(rl1, y, xl0, y),
+        _current_arrow(x_arrow, y),
+        _svg_text(x_arrow, y_lbl, _sub("I", "line"), color=_SVG_ACCENT, weight=600),
+        _inductor_h(xl0, xl1, y),
+        _svg_text((xl0 + xl1) / 2, y_lbl, "j900 Ω", color=_SVG_VALUE),
+        # Lado de carga: I_load, V_0 (+/−) y ramas en derivación
+        _current_arrow(x_iload, y),
+        _svg_text(x_iload, y_lbl, _sub("I", "load"), color=_SVG_ACCENT, weight=600),
+        _svg_text(x_iload + 6, y + 30, "+", color=_SVG_BAD, size=17, weight=600),
+        _svg_text(x_iload + 6, mid + 6, _sub("V", "0"), color=_SVG_VALUE, size=16, weight=600),
+        _svg_text(x_iload + 6, yb - 14, "−", color=_SVG_VALUE, size=17, weight=600),
+        _load_branch(x_l1, _sub("L", "1")),
+        _load_branch(x_l2, _sub("L", "2")),
+        _wire(20, 290, _SVG_W - 20, 290, _SVG_BORDER, 1),
     ]
+    l1_txt = _sub("L", "1") + f" = {_fmt(s1.real, 1)} + j{_fmt(s1.imag, 2)} kVA (fp {demand.pf1[t]:.2f})"
+    l2_txt = _sub("L", "2") + (
+        f" = {_fmt(s2.real, 1)} + j{_fmt(s2.imag, 2)} kVA (fp {demand.pf2[t]:.2f})"
+        if s2.real > 0
+        else " = 0 kVA (fuera de servicio)"
+    )
+    load_readout = _readout(
+        548,
+        "Carga · " + _sub("V", "0") + " = 120∠0° V",
+        [(_sub("I", "load") + f" = {_fmt(i_ld, 2)} A", _SVG_ACCENT), (l1_txt, _SVG_MUTED), (l2_txt, _SVG_MUTED)],
+    )
     if problem2:
-        pf_txt, lagging = pf_label(s_net)
+        pf_txt, lagging = _pf_short(s_net)
         parts += [
-            # Corrientes (fila superior)
-            _value(x_rg, 38, _sub("I", "gen") + f" = {_fmt(i_g, 3)} A"),
-            _flow_arrow(x_rg - 60, x_rg + 60, 54),
-            _value(x_z, 38, _sub("I", "line") + f" = {_fmt(i_l, 3)} A"),
-            _flow_arrow(x_z - 70, x_z + 70, 54),
-            _value(x_bus0 + 70, 38, _sub("I", "load") + f" = {_fmt(i_ld, 2)} A"),
-            _flow_arrow(x_bus0, x_bus0 + 140, 54),
-            # T1 elevador y T2 reductor
-            _wire(x_rg + 34, y, x_t1 - 14, y),
-            _transformer(x_t1, y, 160, 240, y_g),
-            _wire(x_t1 + 14, y, x_z - 80, y),
-            _svg_text(x_t1, 316, "T1 Elevador", color=_SVG_VALUE, size=_SMALL, weight=600),
-            _small(x_t1, 336, "1 kV : 13.2 kV"),
-            _small(x_t1, 354, _sub("n", "1") + " = 13.2"),
-            _wire(x_z + 80, y, x_t2 - 14, y),
-            _transformer(x_t2, y, 160, 240, y_g),
-            _wire(x_t2 + 14, y, x_bus0, y),
-            _svg_text(x_t2, 316, "T2 Reductor", color=_SVG_VALUE, size=_SMALL, weight=600),
-            _small(x_t2, 336, "13.2 kV : 120 V"),
-            _small(x_t2, 354, _sub("a", "2") + " = 110"),
-            # Banco de capacitores (cian) a tierra
-            f'<circle cx="{x_qc}" cy="{y}" r="4" fill="{_SVG_CYAN}"/>',
-            _capacitor_v(x_qc, y, y_g, active=qc > 1e-9),
-            _svg_text(x_qc - 26, 216, _sub("Q", "C"), color=_SVG_CYAN, anchor="end", weight=600),
-            _svg_text(x_qc, 316, "Banco " + _sub("Q", "C"), color=_SVG_CYAN, size=_SMALL, weight=600),
-            _small(x_qc, 336, f"{_fmt(qc, 2)} kvar", color=_SVG_VALUE),
-            _small(x_qc, 354, "activo" if qc > 1e-9 else "0 kvar (desconectado)"),
-            _svg_text(
-                20,
-                424,
-                _sub("S", "neto") + " (barra) = " + _complex_kva(s_net) + " · fp neto = "
-                f'<tspan fill="{_SVG_OK if lagging else _SVG_WARN}" font-weight="600">{pf_txt}</tspan>',
-                anchor="start",
+            # Malla 1: fuente — 0.5 Ω — primario de T1
+            _wire(rg1, y, x_t1 - 30, y),
+            _wire(x_src, yb, x_t1 - 30, yb),
+            _transformer(x_t1),
+            _svg_text(x_t1, y_lbl, params.t1_label, color=_SVG_VALUE),
+            # Malla 2: secundario de T1 — línea — primario de T2
+            _wire(x_t1 + 30, y, rl0, y),
+            _wire(xl1, y, x_t2 - 30, y),
+            _wire(x_t1 + 30, yb, x_t2 - 30, yb),
+            _transformer(x_t2),
+            _svg_text(x_t2, y_lbl, params.t2_label, color=_SVG_VALUE),
+            # Malla 3: secundario de T2 — L1 ‖ L2 ‖ Q_C
+            _wire(x_t2 + 30, y, x_l2, y),
+            _wire(x_t2 + 30, yb, x_l2, yb),
+            _wire(x_l2, y, x_end, y, _SVG_WIRE if active else _SVG_OFF),
+            _wire(x_l2, yb, x_end, yb, _SVG_WIRE if active else _SVG_OFF),
+            _capacitor_branch(x_qc, active),
+            _node(x_l1, y),
+            _node(x_l1, yb),
+            _node(x_l2, y),
+            _node(x_l2, yb),
+            _readout(
+                24,
+                f"Generador ({params.t1_primary_v / 1000:g} kV)",
+                [
+                    ("|" + _sub("V", "gen") + f"| = {_fmt(v_g, 2)} V", v_col),
+                    (_sub("I", "gen") + f" = {_fmt(i_g, 3)} A", _SVG_ACCENT),
+                    (_sub("P", "loss") + f" en 0.5 Ω = {_fmt(pg, 3)} kW", _SVG_MUTED),
+                ],
+            ),
+            _readout(
+                292,
+                f"Línea ({params.line_kv:g} kV)",
+                [
+                    (_sub("I", "line") + f" = {_fmt(i_l, 4)} A", _SVG_ACCENT),
+                    (_sub("P", "loss") + f" en 80 Ω = {_fmt(pl, 3)} kW", _SVG_MUTED),
+                    (_sub("Q", "loss") + f" en j900 Ω = {_fmt(ql, 2)} kvar", _SVG_MUTED),
+                ],
+            ),
+            load_readout,
+            _readout(
+                818,
+                "Banco " + _sub("Q", "C") + " y flujo neto",
+                [
+                    (
+                        _sub("Q", "C") + f" = {_fmt(qc, 2)} kvar" + ("" if active else " (inactivo)"),
+                        _SVG_VALUE if active else _SVG_MUTED,
+                    ),
+                    (_sub("S", "neto") + " = " + _complex_kva(s_net), _SVG_MUTED),
+                    ("fp neto = " + pf_txt, _SVG_OK if lagging else _SVG_WARN),
+                ],
             ),
         ]
     else:
+        s_load = s1 + s2
         parts += [
-            _value(x_z, 38, "I = " + _sub("I", "line") + f" = {_fmt(i_l, 3)} A"),
-            _flow_arrow(x_z - 90, x_z + 90, 54),
-            _wire(x_rg + 34, y, x_z - 80, y),
-            _wire(x_z + 80, y, x_bus0, y),
-            _svg_text(
-                20,
-                424,
-                "Sin transformadores ni banco: " + _sub("S", "neto") + " = " + _sub("S", "carga"),
-                anchor="start",
+            # Una sola malla: fuente — 0.5 Ω — 80 Ω — j900 Ω — L1 ‖ L2
+            _wire(rg1, y, rl0, y),
+            _wire(xl1, y, x_end, y),
+            _wire(x_src, yb, x_end, yb),
+            _node(x_l1, y),
+            _node(x_l1, yb),
+            _readout(
+                24,
+                "Generador",
+                [
+                    ("|" + _sub("V", "gen") + f"| = {_fmt(v_g, 1)} V", v_col),
+                    (_sub("I", "gen") + " = " + _sub("I", "line") + f" = {_fmt(i_g, 3)} A", _SVG_ACCENT),
+                    (_sub("P", "loss") + f" en 0.5 Ω = {_fmt(pg, 3)} kW", _SVG_MUTED),
+                ],
+            ),
+            _readout(
+                292,
+                "Línea (120 V)",
+                [
+                    (_sub("I", "line") + f" = {_fmt(i_l, 3)} A", _SVG_ACCENT),
+                    (_sub("P", "loss") + f" en 80 Ω = {_fmt(pl, 1)} kW", _SVG_MUTED),
+                    (_sub("Q", "loss") + f" en j900 Ω = {_fmt(ql, 0)} kvar", _SVG_MUTED),
+                ],
+            ),
+            load_readout,
+            _readout(
+                818,
+                "Sin transformadores ni banco",
+                [
+                    (_sub("S", "carga") + " = " + _complex_kva(s_load), _SVG_MUTED),
+                    ("fp = " + _pf_short(s_load)[0], _SVG_OK),
+                ],
             ),
         ]
     body = "".join(parts)

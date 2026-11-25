@@ -1,0 +1,84 @@
+====================================================================================================
+  AUDITORÍA INDEPENDIENTE — Problema 2.1 con banco fijo Q_C = 87.25 kvar (sin importar src/)
+====================================================================================================
+  T1 1 kV : 66 kV → n1 = 66   |   T2 66 kV : 120 V → a2 = 550
+  Tensión de la carga referida al generador: 120·a2/n1 = 1,000.0000 V
+  Línea reflejada al generador: Z_line/n1² = 0.018365 + j0.206612 Ω
+  Impedancia vista por el generador: R_gen + Z_line/n1² = 0.518365 + j0.206612 Ω
+  Resistencia total referida a 66 kV: 80 + 0.5·66² = 2,258.00 Ω
+  Corrientes: I_line = I_load / 550   ·   I_gen = 66 · I_line = I_load / 8.33333
+
+  Hora |   P    Q_carga   Q_neto  fp_neto     | I_load     I_line   I_gen    | |V_gen|    áng     banda | P_loss (línea + gen)      Q_loss   |S_gen|
+       |  [kW]  [kvar]    [kvar]              | [A]        [A]      [A]      | [V]        [°]           | [kW]                      [kvar]   [kVA]
+     1 |    70   43.382   -43.868  0.8474 ad. |   688.416   1.2517   82.610 | 1027.8954   +2.074   sí  |   3.5375 (0.1253 + 3.4122)    1.410   84.914
+     2 |    68   42.143   -45.107  0.8333 ad. |   680.006   1.2364   81.601 | 1026.6118   +2.090   sí  |   3.4516 (0.1223 + 3.3293)    1.376   83.772
+     3 |    60   37.185   -50.065  0.7678 ad. |   651.203   1.1840   78.144 | 1021.4780   +2.152   sí  |   3.1654 (0.1121 + 3.0533)    1.262   79.823
+     4 |    50   30.987   -56.263  0.6643 ad. |   627.246   1.1404   75.270 | 1015.0624   +2.230   sí  |   2.9368 (0.1040 + 2.8328)    1.171   76.403
+     5 |    54   33.466   -53.784  0.7085 ad. |   635.123   1.1548   76.215 | 1017.6284   +2.198   sí  |   3.0110 (0.1067 + 2.9043)    1.200   77.558
+     6 |    61   37.804   -49.446  0.7768 ad. |   654.359   1.1897   78.523 | 1022.1196   +2.144   sí  |   3.1962 (0.1132 + 3.0829)    1.274   80.260
+     7 |    64   39.664   -47.586  0.8025 ad. |   664.604   1.2084   79.753 | 1024.0447   +2.120   sí  |   3.2970 (0.1168 + 3.1802)    1.314   81.670
+     8 |    66   67.333   -19.917  0.9574 ad. |   574.497   1.0445   68.940 | 1030.3758   +1.332   sí  |   2.4636 (0.0873 + 2.3763)    0.982   71.034
+     9 |   153  145.028    57.778  0.9355 at. |  1362.884   2.4780  163.546 | 1091.2488   +0.087   sí  |  13.8649 (0.4912 + 13.3737)    5.526  178.469
+    10 |   158  150.129    62.879  0.9291 at. |  1417.103   2.5766  170.052 | 1094.8933   +0.003   sí  |  14.9900 (0.5311 + 14.4589)    5.975  186.189
+    11 |   163  155.230    67.980  0.9229 at. |  1471.732   2.6759  176.608 | 1098.5402   -0.081   sí  |  16.1680 (0.5728 + 15.5952)    6.444  194.011
+    12 |   165  157.271    70.021  0.9205 at. |  1493.688   2.7158  179.243 | 1099.9996   -0.115   sí  |  16.6540 (0.5900 + 16.0640)    6.638  197.167
+    13 |   160  152.170    64.920  0.9266 at. |  1438.908   2.6162  172.669 | 1096.3518   -0.031   sí  |  15.4548 (0.5476 + 14.9073)    6.160  189.306
+    14 |   156  148.089    60.839  0.9317 at. |  1395.364   2.5370  167.444 | 1093.4353   +0.036   sí  |  14.5336 (0.5149 + 14.0187)    5.793  183.089
+    15 |   153  145.028    57.778  0.9355 at. |  1362.884   2.4780  163.546 | 1091.2488   +0.087   sí  |  13.8649 (0.4912 + 13.3737)    5.526  178.469
+    16 |   150  141.968    54.718  0.9394 at. |  1330.571   2.4192  159.668 | 1089.0633   +0.138   sí  |  13.2152 (0.4682 + 12.7470)    5.267  173.889
+    17 |   136   98.967    11.717  0.9963 at. |  1137.532   2.0682  136.504 | 1073.1446   +1.176   sí  |   9.6589 (0.3422 + 9.3166)    3.850  146.488
+    18 |   151  108.263    21.013  0.9905 at. |  1270.459   2.3099  152.455 | 1082.8051   +1.075   sí  |  12.0481 (0.4269 + 11.6213)    4.802  165.079
+    19 |   156  111.362    24.112  0.9883 at. |  1315.437   2.3917  157.852 | 1086.0261   +1.041   sí  |  12.9163 (0.4576 + 12.4587)    5.148  171.432
+    20 |   146  105.164    17.914  0.9926 at. |  1225.791   2.2287  147.095 | 1079.5846   +1.108   sí  |  11.2158 (0.3974 + 10.8185)    4.470  158.801
+    21 |   136   98.967    11.717  0.9963 at. |  1137.532   2.0682  136.504 | 1073.1446   +1.176   sí  |   9.6589 (0.3422 + 9.3166)    3.850  146.488
+    22 |   131   95.868     8.618  0.9978 at. |  1094.026   1.9891  131.283 | 1069.9252   +1.210   sí  |   8.9342 (0.3165 + 8.6176)    3.561  140.463
+    23 |   129   94.629     7.379  0.9984 at. |  1076.757   1.9577  129.211 | 1068.6375   +1.224   sí  |   8.6543 (0.3066 + 8.3477)    3.449  138.080
+    24 |   127   93.389     6.139  0.9988 at. |  1059.569   1.9265  127.148 | 1067.3499   +1.238   sí  |   8.3803 (0.2969 + 8.0833)    3.340  135.712
+
+  Verificaciones físicas (24 horas)
+  [OK] Conservación de potencia compleja: máx |V_gen·I_gen* − (S_neto + S_pérdidas)| / |S_gen| = 3.58e-16
+  [OK] Dos caminos de cálculo coinciden: tramo a tramo vs. impedancia reflejada al generador: 2.17e-16
+  [OK] Transformadores ideales no crean ni pierden potencia: T1: 1.76e-16 · T2: 1.83e-16
+  [OK] Pérdidas = κ·(P² + Q_neto²): κ = R_eq·1000/V_línea² = 5.183654729e-04 kW/kVA² · desviación 4.75e-16
+  [OK] Reparto de pérdidas generador/línea: R_gen referida = 2,178.00 Ω ⇒ 96.46 % en el generador y 3.54 % en la línea
+  [OK] Signo del factor de potencia: 8/24 h en adelanto: las horas con Q_carga < Q_C = 87.25 kvar (Q_carga entre 30.987 y 157.271 kvar)
+
+  Horas clave
+    h01: S_neto = 70.00 -43.868j kVA · I_line = 1.2517 A ∠ +32.075° · V_gen = 1,027.895 V ∠ +2.074° · P_loss = 3.5375 kW · en banda
+    h04: S_neto = 50.00 -56.263j kVA · I_line = 1.1404 A ∠ +48.373° · V_gen = 1,015.062 V ∠ +2.230° · P_loss = 2.9368 kW · en banda
+    h08: S_neto = 66.00 -19.917j kVA · I_line = 1.0445 A ∠ +16.792° · V_gen = 1,030.376 V ∠ +1.332° · P_loss = 2.4636 kW · en banda
+    h12: S_neto = 165.00 +70.021j kVA · I_line = 2.7158 A ∠ -22.995° · V_gen = 1,100.000 V ∠ -0.115° · P_loss = 16.6540 kW · en banda
+    h19: S_neto = 156.00 +24.112j kVA · I_line = 2.3917 A ∠ -8.786° · V_gen = 1,086.026 V ∠ +1.041° · P_loss = 12.9163 kW · en banda
+
+  Totales diarios y anuales
+    Energía servida                 = 2,863.0 kWh/día
+    Pérdidas con Q_C = 0            = 341.6403 kWh/día = 124,698.7 kWh/año → $ 327.975 COP/día → $ 119.710.744 COP/año
+    Pérdidas con Q_C = 87.25       = 225.2714 kWh/día = 82,224.1 kWh/año → $ 216.261 COP/día → $ 78.935.102 COP/año
+      en la línea (80 Ω)            = 7.9813 kWh/día
+      junto al generador (0.5 Ω)    = 217.2901 kWh/día
+    CAPEX = 87.25 kvar × 100 000    = $ 8.725.000 COP
+    J = OPEX + CAPEX                = $ 87.660.102 COP   (con Q_C = 0: $ 119.710.744 COP)
+    Ahorro anual frente a Q_C = 0   = $ 40.775.643 COP
+    Payback                         = 78.10 días
+    ROI a 1 año(s)                  = 367.3 %
+    ROI a 3 año(s)                  = 1,302.0 %
+    ROI a 5 año(s)                  = 2,236.7 %
+  [OK] Costo anual coherente: J(87.25) por la fórmula κ = $ 87.660.102 COP
+
+  Dimensionamiento independiente del banco fijo
+  [OK] Mínimo libre de J: sección áurea 85.75873 kvar = fórmula cerrada 85.75873 kvar → J = $ 87.650.407 COP, 23/24 h en banda
+    dJ/dQ_C en 87.25 kvar = 13,002 COP por kvar
+    J(87.25) / J(mínimo libre) = 1.0001  ·  J(87.25) / J(0) = 0.7323
+    Máximo de horas en banda con un banco fijo (barrido 0–2000 kvar cada 0.1): 24/24
+    Se alcanza para Q_C en [87.2481, 1530.4694] kvar.
+    Mínimo de J dentro de esa ventana: 87.248090 kvar → banco deducido 87.25 kvar.
+  [OK] El banco del proyecto está en la ventana de máximo cumplimiento: 24/24 h en banda; fuera: []
+  [OK] El banco del proyecto coincide con el deducido aquí: proyecto 87.25 kvar · auditoría 87.25 kvar
+    Margen mínimo dentro de la banda: hora 12, |V_gen| = 1099.9996 V (0.0004 V respecto a 1100 V)
+    Sin capacitor: 14/24 h en banda, |V_gen| entre 1032.337 y 1119.030 V
+
+  Contraste con los CSV generados por el proyecto
+  [OK] p21_sin_capacitor_horario.csv coincide con la auditoría: mayor diferencia relativa 4.58e-15
+  [OK] p21_fijo_economico_horario.csv coincide con la auditoría: mayor diferencia relativa 1.28e-14
+
+  RESULTADO: todas las verificaciones pasan (12/12)

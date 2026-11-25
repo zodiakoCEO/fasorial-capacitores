@@ -3,7 +3,8 @@
 Cuatro modos comparables:
 
 1. ``feasibility_analysis``     — intervalos exactos de Q_C por hora con 950 ≤ |V_gen| ≤ 1100 V.
-2. ``fixed_economic_optimum``   — mínimo de J(Q_C) = OPEX anual + CAPEX (cerrado + numérico).
+2. ``fixed_economic_optimum``   — banco fijo de mínimo J = OPEX anual + CAPEX entre los Q_C con el
+                                  máximo de horas en banda (y el mínimo libre de J como referencia).
 3. ``fixed_voltage_pareto``     — frontera de Pareto costo vs. violación de tensión (banco fijo).
 4. ``switched_capacitor_bank``  — banco automático por pasos 100 % factible las 24 h.
 
@@ -412,18 +413,10 @@ def total_annual_cost_fixed(q_c: npt.ArrayLike, demand: DemandProfile, params: N
 
 
 # ==================================================================================
-# 2. Óptimo económico del banco fijo
+# 2. Banco fijo — óptimo económico (sujeto a la banda de tensión)
 # ==================================================================================
-@dataclass(frozen=True, slots=True, eq=False)
-class FixedEconomicResult:
-    q_c_closed_form_kvar: float
-    q_c_numeric_kvar: float
-    derivative_at_optimum: float
-    result: StrategyResult
-
-
 def closed_form_fixed_optimum(demand: DemandProfile, params: NetworkParameters) -> float:
-    """dJ/dQ_C = −2·c_e·κ·Σ(Q(t) − Q_C) + c_cap = 0  ⇒  Q_C* = mean(Q) − c_cap / (2·c_e·κ·N)."""
+    """Mínimo LIBRE de J: dJ/dQ_C = −2·c_e·κ·Σ(Q(t) − Q_C) + c_cap = 0 ⇒ Q_C = mean(Q) − c_cap / (2·c_e·κ·N)."""
     kappa, q = daily_loss_quadratic(demand, params)
     c_e = params.energy_price_cop_per_kwh * params.days_per_year
     q_star = float(np.mean(q) - params.capacitor_cost_cop_per_kvar / (2.0 * c_e * kappa * len(q)))
@@ -436,30 +429,172 @@ def cost_derivative(q_c: float, demand: DemandProfile, params: NetworkParameters
     return float(-2.0 * c_e * kappa * np.sum(q - q_c) + params.capacitor_cost_cop_per_kvar)
 
 
+def hours_in_band(sets: Sequence[IntervalSet], q_c: float, tol: float = 1e-9) -> int:
+    """Número de horas cuyo conjunto factible contiene a ``q_c`` (|V_gen| dentro de la banda)."""
+    return sum(1 for s in sets if set_contains(s, q_c, tol))
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class MaxBandWindow:
+    """Valores de Q_C fijo que mantienen |V_gen| en banda el mayor número posible de horas."""
+
+    hours_in_band: int
+    window: IntervalSet
+    n_hours: int
+
+    @property
+    def is_fully_feasible(self) -> bool:
+        return self.hours_in_band == self.n_hours
+
+
+def max_band_window(feasibility: FeasibilityReport) -> MaxBandWindow:
+    """Ventana exacta de Q_C con el máximo de horas en banda.
+
+    El número de horas en banda solo cambia en los extremos de los intervalos horarios, así que
+    basta evaluarlo en cada extremo y en el punto medio de cada tramo entre extremos consecutivos.
+    Cada conjunto horario es cerrado, por lo que la ventana resultante también lo es.
+    """
+    sets = feasibility.hourly_sets
+    n = len(sets)
+    points = sorted({x for s in sets for iv in s for x in (iv.lo, iv.hi)})
+    if not points:
+        return MaxBandWindow(0, (Interval(0.0, feasibility.q_search_max),), n)
+    best = max(hours_in_band(sets, x) for x in points)
+    pieces = [Interval(lo, hi) for lo, hi in itertools.pairwise(points) if hours_in_band(sets, 0.5 * (lo + hi)) == best]
+    pieces += [Interval(x, x) for x in points if hours_in_band(sets, x) == best]
+    merged: list[Interval] = []
+    for iv in sorted(pieces, key=lambda i: (i.lo, i.hi)):
+        if merged and iv.lo <= merged[-1].hi + EPS:
+            merged[-1] = Interval(merged[-1].lo, max(merged[-1].hi, iv.hi))
+        else:
+            merged.append(iv)
+    return MaxBandWindow(best, tuple(merged), n)
+
+
+def _design_value(q_exact: float, window: IntervalSet, resolution_kvar: float) -> float:
+    """Redondea ``q_exact`` a la resolución de diseño sin salir de la ventana (si es posible)."""
+    if resolution_kvar <= 0:
+        return q_exact
+    per_unit = round(1.0 / resolution_kvar)
+    steps = q_exact * per_unit
+    for k in (round(steps), math.ceil(steps - 1e-9), math.floor(steps + 1e-9)):
+        candidate = k / per_unit
+        if set_contains(window, candidate, tol=0.0):
+            return float(candidate)
+    return q_exact
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class FixedEconomicResult:
+    """Banco fijo — óptimo económico.
+
+    ``result`` evalúa el banco adoptado ``q_c_design_kvar``: el de menor J entre los Q_C fijos que
+    mantienen |V_gen| en banda el máximo de horas (``band``). ``free`` es el mínimo libre de J
+    (sin restricción de tensión), que se conserva solo como referencia matemática.
+    """
+
+    q_c_design_kvar: float
+    q_c_band_optimum_kvar: float
+    band: MaxBandWindow
+    derivative_at_design: float
+    q_c_free_kvar: float
+    q_c_free_numeric_kvar: float
+    derivative_at_free: float
+    free: StrategyResult
+    result: StrategyResult
+
+    @property
+    def hours_out(self) -> tuple[int, ...]:
+        """Horas en las que el banco adoptado deja |V_gen| fuera de la banda."""
+        r = self.result
+        return tuple(int(h) for h in r.circuit.hours[r.violation_v > 1e-6])
+
+
 def fixed_economic_optimum(
-    demand: DemandProfile, params: NetworkParameters | None = None, q_search_max: float = QC_SEARCH_MAX_KVAR
+    demand: DemandProfile,
+    params: NetworkParameters | None = None,
+    q_search_max: float = QC_SEARCH_MAX_KVAR,
+    feasibility: FeasibilityReport | None = None,
+    resolution_kvar: float = 0.01,
 ) -> FixedEconomicResult:
+    """min J(Q_C) sobre los Q_C fijos con el máximo de horas dentro de [V_min, V_max].
+
+    J es una parábola convexa, así que su mínimo sobre cada intervalo de la ventana es la proyección
+    del mínimo libre (forma cerrada) sobre ese intervalo. El valor exacto se redondea a
+    ``resolution_kvar`` (0.01 kvar) hacia el interior de la ventana para obtener el banco adoptado.
+    """
     params = params or NetworkParameters()
-    q_closed = closed_form_fixed_optimum(demand, params)
+    feas = feasibility or feasibility_analysis(demand, params, q_search_max, verify_numerically=False)
+    baseline = solve_problem2(demand, 0.0, params).daily_energy_loss_kwh
+
+    q_free = closed_form_fixed_optimum(demand, params)
     res = minimize_scalar(
         lambda x: float(total_annual_cost_fixed(x, demand, params)),
         bounds=(0.0, q_search_max),
         method="bounded",
         options={"xatol": 1e-10},
     )
-    q_num = float(res.x)
+    band = max_band_window(feas)
+    candidates = [iv.clip(q_free) for iv in band.window]
+    q_band = float(min(candidates, key=lambda x: float(total_annual_cost_fixed(x, demand, params))))
+    q_design = _design_value(q_band, band.window, resolution_kvar)
+
+    free = evaluate_strategy(
+        demand,
+        params,
+        q_free,
+        Strategy.FIXED_ECONOMIC,
+        label="Referencia — mínimo libre de J(Q_C)",
+        baseline_daily_loss_kwh=baseline,
+    )
     result = evaluate_strategy(
         demand,
         params,
-        q_closed,
+        q_design,
         Strategy.FIXED_ECONOMIC,
-        extra={"Q_C_numerico": q_num, "iteraciones": int(res.nfev)},
+        baseline_daily_loss_kwh=baseline,
+        extra={"Q_C_exacto": q_band, "horas_en_banda": band.hours_in_band},
     )
     return FixedEconomicResult(
-        q_c_closed_form_kvar=q_closed,
-        q_c_numeric_kvar=q_num,
-        derivative_at_optimum=cost_derivative(q_closed, demand, params),
+        q_c_design_kvar=q_design,
+        q_c_band_optimum_kvar=q_band,
+        band=band,
+        derivative_at_design=cost_derivative(q_design, demand, params),
+        q_c_free_kvar=q_free,
+        q_c_free_numeric_kvar=float(res.x),
+        derivative_at_free=cost_derivative(q_free, demand, params),
+        free=free,
         result=result,
+    )
+
+
+def _violation_metrics(
+    q_grid: FloatArray, demand: DemandProfile, params: NetworkParameters
+) -> tuple[FloatArray, FloatArray]:
+    model = affine_voltage_model(demand, params)
+    v = np.abs(model.A[None, :] + model.B * q_grid[:, None])
+    viol = voltage_violation(v, params)
+    return viol.max(axis=1), np.sqrt((viol**2).mean(axis=1))
+
+
+def fixed_bank_scan(
+    demand: DemandProfile,
+    params: NetworkParameters,
+    feasibility: FeasibilityReport,
+    q_max: float = 500.0,
+    step_kvar: float = 0.25,
+) -> pd.DataFrame:
+    """Barrido de Q_C fijo: costo anual J, violación máxima de tensión y horas dentro de la banda."""
+    q_grid = np.arange(0.0, q_max + step_kvar / 2, step_kvar)
+    vmax, vrms = _violation_metrics(q_grid, demand, params)
+    return pd.DataFrame(
+        {
+            "Q_C_kvar": q_grid,
+            "Costo_total_anual_COP": total_annual_cost_fixed(q_grid, demand, params),
+            "Violacion_max_V": vmax,
+            "Violacion_RMS_V": vrms,
+            "Horas_en_banda": [hours_in_band(feasibility.hourly_sets, float(x)) for x in q_grid],
+        }
     )
 
 
@@ -479,15 +614,6 @@ class ParetoResult:
     def recommended(self) -> StrategyResult:
         """Banco fijo recomendado: óptimo estrictamente factible si existe; si no, el minimax."""
         return self.feasible_optimum or self.minimax
-
-
-def _violation_metrics(
-    q_grid: FloatArray, demand: DemandProfile, params: NetworkParameters
-) -> tuple[FloatArray, FloatArray]:
-    model = affine_voltage_model(demand, params)
-    v = np.abs(model.A[None, :] + model.B * q_grid[:, None])
-    viol = voltage_violation(v, params)
-    return viol.max(axis=1), np.sqrt((viol**2).mean(axis=1))
 
 
 def pareto_front_mask(cost: FloatArray, violation: FloatArray) -> npt.NDArray[np.bool_]:
@@ -534,7 +660,7 @@ def fixed_voltage_pareto(
     minimax = evaluate_strategy(
         demand, params, q_minimax, Strategy.FIXED_MIN_VIOLATION, baseline_daily_loss_kwh=baseline
     )
-    econ = fixed_economic_optimum(demand, params).result
+    econ = fixed_economic_optimum(demand, params, feasibility=feas).free
 
     feasible_opt: StrategyResult | None = None
     if feas.is_feasible:
